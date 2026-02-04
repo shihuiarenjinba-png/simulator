@@ -1,0 +1,12 @@
+streamlit
+pandas
+numpy
+yfinance>=0.2.0
+plotly>=5.18.0
+statsmodels
+scikit-learn
+pandas-datareader
+requests
+openpyxl
+fpdf2>=2.7.0
+kaleido>=0.2.1
