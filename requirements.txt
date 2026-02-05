@@ -10,4 +10,4 @@ pandas-datareader
 requests
 openpyxl
 fpdf2>=2.7.0
-kaleido>=0.2.1
+kaleido==0.2.1
