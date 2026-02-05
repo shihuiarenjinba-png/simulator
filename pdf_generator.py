@@ -143,8 +143,10 @@ def create_pdf_report(payload, figs):
                         pdf.cell(0, 8, f"Figure: {key.upper().replace('_', ' ')}", 0, 1)
                         pdf.image(tmpfile.name, w=170)
                         pdf.ln(5)
+                # 変更後
                 except Exception as img_err:
-                    pass
+                    st.error(f"Image Error: {img_err}") # 画面にエラーを表示
+                    print(f"Log Image Error: {img_err}") # ログにエラーを記録
 
         # --- 3. Factor Analysis ---
         if 'factor_comment' in payload:
