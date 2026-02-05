@@ -7,6 +7,8 @@ from plotly.subplots import make_subplots
 import os
 import requests
 import io
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # 🔗 Load Brain (Calculation Engine)
 from simulation_engine import MarketDataEngine, PortfolioAnalyzer, PortfolioDiagnosticEngine
