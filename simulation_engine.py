@@ -9,7 +9,7 @@ import pandas_datareader.data as web
 from datetime import datetime
 
 # =========================================================
-# 🛠️ Class Definitions (Brain: V18.1 - Visual Logic Enhanced)
+# 🛠️ Class Definitions (Brain: V18.4 - Fully Corrected)
 # =========================================================
 
 class MarketDataEngine:
@@ -59,7 +59,8 @@ class MarketDataEngine:
             if isinstance(usdjpy, pd.DataFrame):
                 usdjpy = usdjpy.iloc[:, 0]
 
-            usdjpy = usdjpy.resample('M').last().ffill()
+            # 修正: 'M' -> 'ME' (FutureWarning対策)
+            usdjpy = usdjpy.resample('ME').last().ffill()
             if usdjpy.index.tz is not None: 
                 usdjpy.index = usdjpy.index.tz_localize(None)
             
@@ -83,7 +84,8 @@ class MarketDataEngine:
             
             # Process data if successful
             ff_data = ff_data / 100.0
-            ff_data.index = ff_data.index.to_timestamp(freq='M')
+            # 修正: 'M' -> 'ME'
+            ff_data.index = ff_data.index.to_timestamp(freq='ME')
             
             if ff_data.index.tz is not None: 
                 ff_data.index = ff_data.index.tz_localize(None)
@@ -121,7 +123,8 @@ class MarketDataEngine:
                 else:
                     data = raw_data
 
-            data = data.resample('M').last().ffill()
+            # 修正: 'M' -> 'ME'
+            data = data.resample('ME').last().ffill()
             if data.index.tz is not None:
                 data.index = data.index.tz_localize(None)
 
@@ -168,7 +171,8 @@ class MarketDataEngine:
             if isinstance(data, pd.DataFrame):
                 data = data.iloc[:, 0]
 
-            data = data.resample('M').last().ffill()
+            # 修正: 'M' -> 'ME'
+            data = data.resample('ME').last().ffill()
             if data.index.tz is not None:
                 data.index = data.index.tz_localize(None)
 
@@ -235,7 +239,10 @@ class PortfolioAnalyzer:
             return None, None
 
     @staticmethod
-    def run_monte_carlo_simulation(port_ret, n_years=20, n_simulations=7500, initial_investment=1000000):
+    def run_monte_carlo_simulation(port_ret, n_years=20, n_simulations=5000, initial_investment=1000000):
+        """
+        修正: デフォルト回数を7500 -> 5000に変更
+        """
         if port_ret.empty:
             return None, None
 
@@ -255,7 +262,8 @@ class PortfolioAnalyzer:
         price_paths[1:] = initial_investment * np.cumprod(daily_returns, axis=0)
         
         last_date = port_ret.index[-1]
-        future_dates = pd.date_range(start=last_date, periods=n_months + 1, freq='M')
+        # 修正: 'M' -> 'ME'
+        future_dates = pd.date_range(start=last_date, periods=n_months + 1, freq='ME')
         
         percentiles = [10, 50, 90]
         stats_data = np.percentile(price_paths, percentiles, axis=1)
@@ -377,7 +385,7 @@ class PortfolioAnalyzer:
         diff_val = final_gross - final_net
         lost_pct = 1 - (final_net / final_gross) 
         
-        # Returned annual_cost removed to fix unpacking error in app.py
+        # 修正: 戻り値を4つに統一 (unpacking error回避)
         return gross_cum, net_cum, diff_val, lost_pct
 
     @staticmethod
@@ -419,7 +427,6 @@ class PortfolioAnalyzer:
     def calculate_risk_contribution(returns_df, weights_dict):
         """
         Calculates Marginal Risk Contribution (MRC).
-        UPDATED: Removed sorting to maintain asset order for comparison charts.
         """
         assets = list(weights_dict.keys())
         valid_assets = [a for a in assets if a in returns_df.columns]
@@ -445,19 +452,13 @@ class PortfolioAnalyzer:
         # Percent Contribution: RC / PortVol
         rc_pct = rc / port_vol
         
-        # Removed .sort_values(ascending=False) to keep alignment with weights
+        # 修正: sort_valuesを削除し、投資比率と同じ並び順を維持
         return rc_pct
 
     @staticmethod
     def calculate_label_offsets(values, min_dist=0.08, base_y=1.05):
         """
         Calculates Y-axis offsets for histogram labels to prevent overlap.
-        Args:
-            values: List or Series of x-values (stats).
-            min_dist: Minimum normalized distance to consider 'overlapping'.
-            base_y: Starting Y multiplier.
-        Returns:
-            List of Y multipliers [1.05, 1.2, 1.05, ...] corresponding to input values.
         """
         if not values: return []
         
@@ -483,7 +484,6 @@ class PortfolioAnalyzer:
             
             if dist < min_dist:
                 # If close to previous, bump up level
-                # Toggle between 2-3 levels: base, base+0.15, base+0.3
                 prev_level = levels[i-1]
                 if prev_level == base_y:
                     current_level = base_y + 0.15
