@@ -4,6 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 import warnings
+import unicodedata  # 追加: 全角・半角変換用
 from sklearn.decomposition import PCA
 
 # 将来の警告を無視する設定
@@ -143,24 +144,44 @@ with st.sidebar:
 # =========================================================
 
 if analyze_btn:
-    with st.spinner("⏳ データを取得し、7,500回のシミュレーションを実行中..."):
+    # メモリ保護のため回数を5,000回に調整
+    n_sims = 5000
+    with st.spinner(f"⏳ データを取得し、{n_sims:,}回のシミュレーションを実行中..."):
         try:
-            # 1. 入力解析
-            raw_items = [item.strip() for item in input_text.split(',')]
+            # 1. 入力解析 (堅牢化: 全角→半角変換、改行対応)
+            # 正規化 (NFKC) で全角英数を半角に変換
+            normalized_text = unicodedata.normalize('NFKC', input_text)
+            # 改行をカンマに置換して、改行区切りでも動くようにする
+            normalized_text = normalized_text.replace('\n', ',')
+            
+            raw_items = [item.strip() for item in normalized_text.split(',') if item.strip()]
             parsed_dict = {}
+            error_lines = []
+            
             for item in raw_items:
                 try:
-                    k, v = item.split(':')
-                    parsed_dict[k.strip()] = float(v.strip())
-                except: pass
+                    if ':' in item:
+                        k, v = item.split(':')
+                        parsed_dict[k.strip()] = float(v.strip())
+                    elif ' ' in item: # コロンがない場合、スペース区切りも試行
+                        parts = item.split()
+                        if len(parts) >= 2:
+                            parsed_dict[parts[0].strip()] = float(parts[1].strip())
+                except:
+                    error_lines.append(item)
 
-            if not parsed_dict: st.stop()
+            if error_lines:
+                st.warning(f"⚠️ 読み取れなかった行があります (スキップしました): {', '.join(error_lines)}")
+
+            if not parsed_dict:
+                st.error("有効なデータが見つかりません。「ティッカー: 比率」の形式で入力してください。")
+                st.stop()
 
             # 🚀 Engine 呼び出し
             engine = MarketDataEngine()
             valid_assets, _ = engine.validate_tickers(parsed_dict)
             if not valid_assets:
-                st.error("有効なティッカーが見つかりませんでした。")
+                st.error("有効なティッカーが1つも見つかりませんでした。入力コードを確認してください。")
                 st.stop()
 
             tickers = list(valid_assets.keys())
@@ -238,10 +259,11 @@ if st.session_state.portfolio_data:
     else:
         factor_comment = "ファクターデータが不足しており分析できません。"
 
-    # モンテカルロ
+    # モンテカルロ (クラウド環境用に5000回に設定)
     sim_years = 20
     init_inv = 1000000
-    df_stats, final_values = analyzer.run_monte_carlo_simulation(port_ret, n_years=sim_years, n_simulations=7500, initial_investment=init_inv)
+    n_sims = 5000 
+    df_stats, final_values = analyzer.run_monte_carlo_simulation(port_ret, n_years=sim_years, n_simulations=n_sims, initial_investment=init_inv)
     
     final_median = np.median(final_values)
     final_p10 = np.percentile(final_values, 10)
@@ -476,7 +498,6 @@ if st.session_state.portfolio_data:
         st.subheader("コストによるリターン低下分析 (20年シミュレーション)")
         
         # 修正: エンジンの戻り値4つに対応 (gross, net, loss, cost_pct)
-        # 万が一エンジンがまだ3つしか返さない場合のエラーハンドリング
         sim_res = analyzer.cost_drag_simulation(port_ret, data['cost_tier'])
         if len(sim_res) == 4:
             gross, net, loss, cost_pct = sim_res
@@ -553,7 +574,7 @@ if st.session_state.portfolio_data:
             figs_for_report['attribution'] = fig_compare
 
     with tab6:
-        st.subheader("🎲 モンテカルロ・シミュレーション (7,500回 / ファットテール対応)")
+        st.subheader(f"🎲 モンテカルロ・シミュレーション ({n_sims:,}回 / ファットテール対応)")
         if df_stats is not None:
             fig_mc = go.Figure()
             fig_mc.add_trace(go.Scatter(x=df_stats.index, y=df_stats['p50'], mode='lines', name='中央値', line=dict(color=COLORS['median'], width=3)))
@@ -608,7 +629,7 @@ if st.session_state.portfolio_data:
             )
             st.plotly_chart(fig_mc_hist, use_container_width=True)
             
-            st.success(f"✅ シミュレーション完了: **7,500 シナリオ** を生成しました。")
+            st.success(f"✅ シミュレーション完了: **{n_sims:,} シナリオ** を生成しました。")
 
     # --- 5. データ保存 ---
     st.session_state.payload = analysis_payload
@@ -633,6 +654,7 @@ if st.session_state.analysis_done:
                 try:
                     final_payload = st.session_state.payload.copy()
                     
+                    # サイドバーの入力値をキャプチャ
                     if 'advisor_note' in locals() or 'advisor_note' in globals():
                         final_payload['advisor_note'] = advisor_note
                     
@@ -642,7 +664,6 @@ if st.session_state.analysis_done:
                         
                         if pdf_buffer:
                             # 修正: BytesIOオブジェクトからバイト列を取り出す (.getvalue())
-                            # これにより '_io.BytesIO has no len()' エラーを回避します
                             st.session_state.pdf_bytes = pdf_buffer.getvalue()
                             
                             st.success(f"✅ レポートの準備ができました! ({len(st.session_state.pdf_bytes):,} bytes)")
