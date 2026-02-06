@@ -664,6 +664,7 @@ if st.session_state.analysis_done:
                         
                         if pdf_buffer:
                             # 修正: BytesIOオブジェクトからバイト列を取り出す (.getvalue())
+                            # これにより '_io.BytesIO has no len()' エラーを回避します
                             st.session_state.pdf_bytes = pdf_buffer.getvalue()
                             
                             st.success(f"✅ レポートの準備ができました! ({len(st.session_state.pdf_bytes):,} bytes)")
