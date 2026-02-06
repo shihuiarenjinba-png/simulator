@@ -9,7 +9,7 @@ import pandas_datareader.data as web
 from datetime import datetime
 
 # =========================================================
-# 🛠️ Class Definitions (Brain: V18.4 - Fully Corrected)
+# 🛠️ Class Definitions (Structure Fixed for Import Safety)
 # =========================================================
 
 class MarketDataEngine:
