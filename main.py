@@ -14,13 +14,28 @@ if src_dir not in sys.path:
 
 from src.regime_data import RegimeDataLoader
 from src.regime_features import build_regime_features
-from src.market_relationships import (
-    DEFAULT_MARKET_INDICATORS,
-    compute_lag_profile,
-    compute_lead_lag_relationships,
-    load_market_relationship_frame,
-)
 from src.regime_model import WaveletHMMRegimeModel
+
+try:
+    from src.market_relationships import (
+        DEFAULT_MARKET_INDICATORS,
+        compute_lag_profile,
+        compute_lead_lag_relationships,
+        load_market_relationship_frame,
+    )
+    MARKET_RELATIONSHIPS_IMPORT_ERROR = None
+except Exception as exc:
+    DEFAULT_MARKET_INDICATORS = {}
+    MARKET_RELATIONSHIPS_IMPORT_ERROR = exc
+
+    def load_market_relationship_frame(*args, **kwargs):
+        raise RuntimeError("market_relationships module is unavailable") from MARKET_RELATIONSHIPS_IMPORT_ERROR
+
+    def compute_lead_lag_relationships(*args, **kwargs):
+        raise RuntimeError("market_relationships module is unavailable") from MARKET_RELATIONSHIPS_IMPORT_ERROR
+
+    def compute_lag_profile(*args, **kwargs):
+        raise RuntimeError("market_relationships module is unavailable") from MARKET_RELATIONSHIPS_IMPORT_ERROR
 
 
 st.set_page_config(page_title="Market Factor Lab", layout="wide")
@@ -62,50 +77,57 @@ def render_factor_tab() -> None:
     st.subheader("株価中心の影響マップ")
     st.write("基準となる株価指数を中心にして、周辺の市場・経済指標がどう連動し、先行または遅行しているかを見ます。")
 
-    top_col1, top_col2 = st.columns([1, 1])
-    base_ticker = top_col1.text_input("中心に置く株価指数", value="^GSPC")
-    relationship_start = top_col2.text_input("分析開始日", value="2000-01-01", key="relationship_start")
-
-    if st.button("影響マップを作成する", type="primary"):
-        with st.spinner("周辺指標との相関・先行遅行を計算しています..."):
-            relationship_df = load_relationship_data(base_ticker, relationship_start)
-            relationship_table = compute_lead_lag_relationships(relationship_df, base_col="base_asset", max_lag=6)
-
-            if relationship_table.empty:
-                st.warning("相関を計算できるだけのデータが集まりませんでした。")
-                return
-
-            fig = px.bar(
-                relationship_table,
-                x="best_corr",
-                y="indicator",
-                color="relationship_type",
-                orientation="h",
-                hover_data=["same_month_corr", "best_lag_months", "impact_direction"],
-                title=f"{base_ticker} に対する周辺指標の影響",
-            )
-            fig.update_layout(yaxis_title="周辺指標", xaxis_title="最大相関")
-            st.plotly_chart(fig, use_container_width=True)
-
-            st.markdown("**相関・先行遅行テーブル**")
-            st.dataframe(relationship_table, use_container_width=True)
-
-            selected_indicator = st.selectbox("ラグの形を見る指標", relationship_table["indicator"].tolist(), key="lag_profile_indicator")
-            lag_profile = compute_lag_profile(relationship_df, selected_indicator, max_lag=6)
-            lag_fig = px.line(
-                lag_profile,
-                x="lag_months",
-                y="correlation",
-                markers=True,
-                title=f"{selected_indicator} と {base_ticker} の先行・遅行プロファイル",
-            )
-            lag_fig.update_layout(xaxis_title="ラグ(月)  正なら先行 / 負なら遅行", yaxis_title="相関")
-            st.plotly_chart(lag_fig, use_container_width=True)
-
-            with st.expander("現在使っている周辺指標"):
-                st.write(DEFAULT_MARKET_INDICATORS)
+    if MARKET_RELATIONSHIPS_IMPORT_ERROR is not None:
+        st.warning(
+            "影響マップ機能の追加ファイルがまだ反映されていないため、この部分はいったん停止しています。"
+            " ただし下の既存分析とレジーム研究は使えます。"
+        )
+        st.caption(f"読み込みエラー: {MARKET_RELATIONSHIPS_IMPORT_ERROR}")
     else:
-        st.info("まずは株価指数を1つ決めて、周辺の株価指数や経済指標との関係を見られます。")
+        top_col1, top_col2 = st.columns([1, 1])
+        base_ticker = top_col1.text_input("中心に置く株価指数", value="^GSPC")
+        relationship_start = top_col2.text_input("分析開始日", value="2000-01-01", key="relationship_start")
+
+        if st.button("影響マップを作成する", type="primary"):
+            with st.spinner("周辺指標との相関・先行遅行を計算しています..."):
+                relationship_df = load_relationship_data(base_ticker, relationship_start)
+                relationship_table = compute_lead_lag_relationships(relationship_df, base_col="base_asset", max_lag=6)
+
+                if relationship_table.empty:
+                    st.warning("相関を計算できるだけのデータが集まりませんでした。")
+                    return
+
+                fig = px.bar(
+                    relationship_table,
+                    x="best_corr",
+                    y="indicator",
+                    color="relationship_type",
+                    orientation="h",
+                    hover_data=["same_month_corr", "best_lag_months", "impact_direction"],
+                    title=f"{base_ticker} に対する周辺指標の影響",
+                )
+                fig.update_layout(yaxis_title="周辺指標", xaxis_title="最大相関")
+                st.plotly_chart(fig, use_container_width=True)
+
+                st.markdown("**相関・先行遅行テーブル**")
+                st.dataframe(relationship_table, use_container_width=True)
+
+                selected_indicator = st.selectbox("ラグの形を見る指標", relationship_table["indicator"].tolist(), key="lag_profile_indicator")
+                lag_profile = compute_lag_profile(relationship_df, selected_indicator, max_lag=6)
+                lag_fig = px.line(
+                    lag_profile,
+                    x="lag_months",
+                    y="correlation",
+                    markers=True,
+                    title=f"{selected_indicator} と {base_ticker} の先行・遅行プロファイル",
+                )
+                lag_fig.update_layout(xaxis_title="ラグ(月)  正なら先行 / 負なら遅行", yaxis_title="相関")
+                st.plotly_chart(lag_fig, use_container_width=True)
+
+                with st.expander("現在使っている周辺指標"):
+                    st.write(DEFAULT_MARKET_INDICATORS)
+        else:
+            st.info("まずは株価指数を1つ決めて、周辺の株価指数や経済指標との関係を見られます。")
 
     st.divider()
     st.subheader("既存のファクター寄与分析")
