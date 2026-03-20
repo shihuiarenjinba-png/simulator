@@ -12,9 +12,6 @@ src_dir = os.path.join(current_dir, "src")
 if src_dir not in sys.path:
     sys.path.append(src_dir)
 
-from src.analyzer import EconomicAnalyzer
-from src.data_loader import DataLoader
-from src.modeler import EconomicModeler
 from src.regime_data import RegimeDataLoader
 from src.regime_features import build_regime_features
 from src.regime_model import WaveletHMMRegimeModel
@@ -25,6 +22,8 @@ st.set_page_config(page_title="Market Factor Lab", layout="wide")
 
 @st.cache_data(show_spinner=False)
 def load_factor_data() -> pd.DataFrame:
+    from src.data_loader import DataLoader
+
     loader = DataLoader()
     return loader.get_merged_data()
 
@@ -54,6 +53,9 @@ def render_factor_tab() -> None:
             if not available_targets:
                 st.error("分析対象となるターゲット指標が見つかりませんでした。")
                 return
+
+            from src.analyzer import EconomicAnalyzer
+            from src.modeler import EconomicModeler
 
             analyzer = EconomicAnalyzer(df_master)
             lag_results = analyzer.analyze_multi_targets(available_targets)
