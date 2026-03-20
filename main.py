@@ -77,6 +77,12 @@ def load_relationship_data(base_ticker: str, start_date: str) -> pd.DataFrame:
     return load_market_relationship_frame(base_ticker=base_ticker, start_date=start_date)
 
 
+def ensure_app_state() -> None:
+    st.session_state.setdefault("factor_df_master", None)
+    st.session_state.setdefault("factor_lag_results", None)
+    st.session_state.setdefault("factor_available_targets", [])
+
+
 def render_factor_tab() -> None:
     st.subheader("株価中心の影響マップ")
     st.write("基準となる株価指数を中心にして、周辺の市場・経済指標がどう連動し、先行または遅行しているかを見ます。")
@@ -149,60 +155,78 @@ def render_factor_tab() -> None:
             """
         )
 
-    if st.button("ファクターデータを取得して分析する", type="primary"):
+    if st.button("ファクターデータを取得 / 更新する", type="primary"):
         with st.spinner("データ取得とラグ分析を進めています..."):
             df_master = load_factor_data()
 
             if df_master.empty:
                 st.error("データ取得に失敗しました。ネットワーク接続やデータソースを確認してください。")
+                st.session_state["factor_df_master"] = None
+                st.session_state["factor_lag_results"] = None
+                st.session_state["factor_available_targets"] = []
                 return
-
-            st.success(f"{len(df_master)} ヶ月分のデータを取得しました。")
-            st.dataframe(df_master.tail(12), use_container_width=True)
 
             available_targets = [col for col in ["DI_Coincident", "CI_Coincident", "VIX", "USD_JPY"] if col in df_master.columns]
             if not available_targets:
                 st.error("分析対象となるターゲット指標が見つかりませんでした。")
+                st.session_state["factor_df_master"] = None
+                st.session_state["factor_lag_results"] = None
+                st.session_state["factor_available_targets"] = []
                 return
 
             from src.analyzer import EconomicAnalyzer
-            from src.modeler import EconomicModeler
 
             analyzer = EconomicAnalyzer(df_master)
             lag_results = analyzer.analyze_multi_targets(available_targets)
+            st.session_state["factor_df_master"] = df_master
+            st.session_state["factor_lag_results"] = lag_results
+            st.session_state["factor_available_targets"] = available_targets
 
-            target = st.selectbox("分析対象", available_targets, index=0, key="factor_target")
-            if target not in lag_results:
-                st.warning("このターゲットのラグ分析結果がありません。")
-                return
+    factor_df_master = st.session_state.get("factor_df_master")
+    factor_lag_results = st.session_state.get("factor_lag_results")
+    factor_available_targets = st.session_state.get("factor_available_targets", [])
 
-            lag_table = pd.DataFrame(lag_results[target]).T.reset_index().rename(columns={"index": "factor"})
-            st.markdown("**最適ラグの候補**")
-            st.dataframe(lag_table, use_container_width=True)
+    if factor_df_master is not None and factor_lag_results:
+        st.success(f"{len(factor_df_master)} ヶ月分のデータを取得済みです。分析対象を切り替えられます。")
+        st.dataframe(factor_df_master.tail(12), use_container_width=True)
 
-            df_aligned = analyzer.get_lagged_dataset(target)
-            if df_aligned is None or df_aligned.empty:
-                st.warning("モデリング用データが作成できませんでした。")
-                return
+        target = st.selectbox("分析対象のデータ", factor_available_targets, index=0, key="factor_target")
+        if target not in factor_lag_results:
+            st.warning("このターゲットのラグ分析結果がありません。")
+            return
 
-            modeler = EconomicModeler(df_aligned)
-            results = modeler.train_model()
-            if not results:
-                st.warning("モデル学習に必要なデータが不足しています。")
-                return
+        lag_table = pd.DataFrame(factor_lag_results[target]).T.reset_index().rename(columns={"index": "factor"})
+        st.markdown("**最適ラグの候補**")
+        st.dataframe(lag_table, use_container_width=True)
 
-            contribution_df = pd.DataFrame(results["contributions"])
-            fig = px.bar(
-                contribution_df,
-                x="factor",
-                y="weight",
-                color="weight",
-                title=f"{target} に対するファクター寄与",
-            )
-            st.plotly_chart(fig, use_container_width=True)
-            st.metric("R^2", f"{results['r_squared']:.3f}")
+        from src.analyzer import EconomicAnalyzer
+        from src.modeler import EconomicModeler
+
+        analyzer = EconomicAnalyzer(factor_df_master)
+        analyzer.results = factor_lag_results
+        df_aligned = analyzer.get_lagged_dataset(target)
+        if df_aligned is None or df_aligned.empty:
+            st.warning("モデリング用データが作成できませんでした。")
+            return
+
+        modeler = EconomicModeler(df_aligned)
+        results = modeler.train_model()
+        if not results:
+            st.warning("モデル学習に必要なデータが不足しています。")
+            return
+
+        contribution_df = pd.DataFrame(results["contributions"])
+        fig = px.bar(
+            contribution_df,
+            x="factor",
+            y="weight",
+            color="weight",
+            title=f"{target} に対するファクター寄与",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        st.metric("R^2", f"{results['r_squared']:.3f}")
     else:
-        st.info("左のボタンで既存の経済ファクター分析を実行できます。")
+        st.info("上のボタンでデータを取得すると、ここで分析対象を切り替えられます。")
 
 
 def render_regime_tab() -> None:
@@ -229,6 +253,7 @@ def render_regime_tab() -> None:
             - `レジーム分析を実行する`: 下のグラフと表を更新して、CSV も保存します。
             """
         )
+    st.caption("ここで出る線や局面は探索的な研究結果です。これだけで平均回帰が正式に証明されたことにはなりません。正式な検証には、外部期間テストや感度分析が必要です。")
 
     col1, col2, col3, col4 = st.columns(4)
     ticker = col1.text_input("Ticker", value="^GSPC")
@@ -337,6 +362,7 @@ def render_notes_tab() -> None:
 
 
 def main() -> None:
+    ensure_app_state()
     st.title("Market Factor Lab")
     st.caption("既存のファクター分析と、Wavelet / HMM レジーム研究を1つの画面から試せます。")
 
