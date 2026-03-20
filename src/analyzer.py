@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 
 class EconomicAnalyzer:
-    def __init__(self, df):
+    def __init__(self, df, factors=None):
         """
         :param df: data_loaderによって結合された、全指標を含むDataFrame
         """
@@ -10,7 +10,7 @@ class EconomicAnalyzer:
         
         # 分析に使用する説明変数（Fama-French 5 Factors）
         # data_loaderのカラム名に合わせて調整してください
-        self.factors = ['Mkt-RF', 'SMB', 'HML', 'RMW', 'CMA']
+        self.factors = factors or ['Mkt-RF', 'SMB', 'HML', 'RMW', 'CMA']
         
         # 分析結果を格納する辞書
         self.results = {}
