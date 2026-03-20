@@ -70,5 +70,7 @@ class WaveletHMMRegimeModel:
             "regime_label": latest["regime_label"],
             "return_1m": float(latest["return_1m"]),
             "trend_gap": float(latest["trend_gap"]),
+            "active_growth_target": float(latest.get("active_growth_target", 0.0)),
+            "active_growth_window_months": float(latest.get("active_growth_window_months", 0.0)),
             "current_state_prob": current_state_prob,
         }
