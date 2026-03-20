@@ -60,7 +60,12 @@ def load_macro_relationship_frame(base_ticker: str, start_date: str, end_date: s
     price_df = price_loader.fetch_monthly_prices()[["return_1m"]].rename(columns={"return_1m": "base_asset"})
     macro_features = load_macro_feature_frame(start_date=start_date, end_date=end_date)
     frame = price_df.join(macro_features, how="left")
-    return frame[frame["base_asset"].notna()]
+    frame = frame[frame["base_asset"].notna()]
+    frame.attrs["requested_ticker"] = base_ticker
+    frame.attrs["normalized_ticker"] = ticker
+    frame.attrs["resolved_ticker"] = price_loader.resolved_ticker
+    frame.attrs["used_proxy"] = price_loader.resolved_ticker != ticker
+    return frame
 
 
 def compute_macro_lead_lag_relationships(
@@ -68,7 +73,7 @@ def compute_macro_lead_lag_relationships(
     base_col: str = "base_asset",
     max_lag: int = 12,
 ) -> pd.DataFrame:
-    if base_col not in frame.columns:
+    if frame is None or frame.empty or base_col not in frame.columns:
         raise ValueError(f"{base_col} not found in macro frame.")
 
     base_series = frame[base_col]
