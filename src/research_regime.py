@@ -22,6 +22,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ticker", default="^GSPC", help="Yahoo Finance ticker. Default: ^GSPC")
     parser.add_argument("--start-date", default="1990-01-01", help="Analysis start date")
     parser.add_argument("--growth-target", type=float, default=0.06, help="Annual long-run growth target")
+    parser.add_argument("--growth-mode", choices=["fixed", "auto"], default="fixed", help="Growth target mode")
+    parser.add_argument("--candidate-targets", default="0.03,0.06", help="Comma-separated growth targets for auto mode")
     parser.add_argument("--trend-window", type=int, default=120, help="Trend window in months")
     parser.add_argument("--wavelet-window", type=int, default=48, help="Wavelet rolling window in months")
     parser.add_argument("--wavelet", default="db2", help="Wavelet family name")
@@ -32,6 +34,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    candidate_targets = [float(value) for value in args.candidate_targets.split(",") if value.strip()]
 
     loader = RegimeDataLoader(ticker=args.ticker, start_date=args.start_date)
     prices = loader.fetch_monthly_prices()
@@ -42,6 +45,8 @@ def main() -> None:
         trend_window_months=args.trend_window,
         wavelet_window_months=args.wavelet_window,
         wavelet_name=args.wavelet,
+        growth_target_mode=args.growth_mode,
+        candidate_targets=candidate_targets,
     )
 
     model = WaveletHMMRegimeModel(n_states=args.states)
