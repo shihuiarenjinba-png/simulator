@@ -1,10 +1,10 @@
 import pandas as pd
-import pandas_datareader.data as web
 import yfinance as yf
 import requests
 from bs4 import BeautifulSoup
 import io
 import datetime
+import zipfile
 
 class DataLoader:
     def __init__(self):
@@ -122,20 +122,47 @@ class DataLoader:
         """
         print(f"[{datetime.datetime.now().time()}] Fetching Fama-French 5 Factors (Japan)...")
         try:
-            # 日本の5ファクター
-            ds = web.DataReader('Japan_5_Factors', 'famafrench', start=self.start_date, end=self.end_date)
-            df_ff = ds[0] # 月次リターン
-            
-            # IndexをTimestampに変換
-            df_ff.index = df_ff.index.to_timestamp()
-            
-            # 月末日付を「翌月の1日」または「当月の1日」に揃える
-            # ここでは内閣府データに合わせて「当月の1日」に補正します
-            df_ff.index = df_ff.index + pd.offsets.MonthBegin(-1) + pd.offsets.MonthBegin(1)
-            
-            # カラム名を扱いやすく変更
-            df_ff.columns = [c.strip() for c in df_ff.columns]
-            
+            zip_url = "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/Japan_5_Factors_CSV.zip"
+            res = requests.get(zip_url, timeout=30)
+            res.raise_for_status()
+
+            with zipfile.ZipFile(io.BytesIO(res.content)) as zf:
+                csv_name = next((name for name in zf.namelist() if name.lower().endswith(".csv")), None)
+                if not csv_name:
+                    raise ValueError("Fama-French zip did not contain a CSV file.")
+                raw_text = zf.read(csv_name).decode("utf-8", errors="ignore")
+
+            lines = [line.strip() for line in raw_text.splitlines()]
+            header_idx = next(
+                (idx for idx, line in enumerate(lines) if "Mkt-RF" in line and "SMB" in line and "CMA" in line),
+                None,
+            )
+            if header_idx is None:
+                raise ValueError("Could not find Fama-French header row.")
+
+            data_rows = []
+            for line in lines[header_idx + 1 :]:
+                if not line:
+                    if data_rows:
+                        break
+                    continue
+                parts = [part.strip() for part in line.split(",")]
+                if not parts or not parts[0].isdigit() or len(parts[0]) != 6:
+                    if data_rows:
+                        break
+                    continue
+                data_rows.append(parts[:7])
+
+            if not data_rows:
+                raise ValueError("No monthly Fama-French rows were parsed.")
+
+            columns = ["Date", "Mkt-RF", "SMB", "HML", "RMW", "CMA", "RF"]
+            df_ff = pd.DataFrame(data_rows, columns=columns)
+            df_ff["Date"] = pd.to_datetime(df_ff["Date"], format="%Y%m")
+            df_ff.set_index("Date", inplace=True)
+            df_ff = df_ff.apply(pd.to_numeric, errors="coerce")
+            df_ff = df_ff.loc[self.start_date : self.end_date]
+
             print("Fama-French data fetched.")
             return df_ff
             
@@ -152,6 +179,12 @@ class DataLoader:
             tickers = ['^VIX', 'JPY=X']
             # auto_adjust=Trueで配当調整後終値などを自動取得
             df = yf.download(tickers, start=self.start_date, end=self.end_date, progress=False)
+
+            if isinstance(df.columns, pd.MultiIndex):
+                if "Adj Close" in df.columns.get_level_values(0):
+                    df = df["Adj Close"]
+                elif "Close" in df.columns.get_level_values(0):
+                    df = df["Close"]
             
             # 'Close' または 'Adj Close' を取得（yfinanceのバージョンによる違いを吸収）
             if 'Adj Close' in df.columns:
@@ -181,12 +214,13 @@ class DataLoader:
         df_ff = self.fetch_fama_french()
         df_market = self.fetch_market_data()
         
-        # 2. 結合 (Inner Join)
-        # まずはFFとMarket
-        df_merged = df_ff.join(df_market, how='inner')
-        
-        # 次に内閣府
-        final_df = df_merged.join(df_cabinet, how='inner')
+        datasets = [df for df in [df_ff, df_market, df_cabinet] if df is not None and not df.empty]
+        if not datasets:
+            return pd.DataFrame()
+
+        final_df = datasets[0]
+        for df in datasets[1:]:
+            final_df = final_df.join(df, how='inner')
         
         # 欠損値削除
         final_df.dropna(inplace=True)
