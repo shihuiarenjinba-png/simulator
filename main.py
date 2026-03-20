@@ -15,6 +15,7 @@ if src_dir not in sys.path:
 from src.regime_data import RegimeDataLoader
 from src.regime_features import build_regime_features
 from src.regime_model import WaveletHMMRegimeModel
+from src.factor_library import FACTOR_DATASETS, FIVE_FACTOR_COLUMNS, PORTFOLIO_DATASETS
 
 try:
     from src.market_relationships import (
@@ -60,6 +61,9 @@ BASE_TICKER_PRESETS = {
     "Custom": "__custom__",
 }
 
+FACTOR_SOURCE_PRESETS = list(FACTOR_DATASETS.keys())
+PORTFOLIO_SOURCE_PRESETS = list(PORTFOLIO_DATASETS.keys())
+
 REGIME_LABELS_JA = {
     "supportive_uptrend": "上昇を支える局面",
     "transition": "転換・様子見局面",
@@ -68,11 +72,18 @@ REGIME_LABELS_JA = {
 
 
 @st.cache_data(show_spinner=False)
-def load_factor_data() -> pd.DataFrame:
+def load_factor_data(factor_source: str, portfolio_source: str) -> pd.DataFrame:
     from src.data_loader import DataLoader
 
-    loader = DataLoader()
+    loader = DataLoader(factor_source=factor_source, portfolio_source=portfolio_source)
     return loader.get_merged_data()
+
+
+@st.cache_data(show_spinner=False)
+def load_factor_feature_frame(factor_source: str) -> pd.DataFrame:
+    df = load_factor_data(factor_source, "なし")
+    available_factor_cols = [col for col in FIVE_FACTOR_COLUMNS if col in df.columns]
+    return df[available_factor_cols].dropna() if available_factor_cols else pd.DataFrame()
 
 
 @st.cache_data(show_spinner=False)
@@ -90,6 +101,10 @@ def ensure_app_state() -> None:
     st.session_state.setdefault("factor_df_master", None)
     st.session_state.setdefault("factor_lag_results", None)
     st.session_state.setdefault("factor_available_targets", [])
+    st.session_state.setdefault("factor_source_name", FACTOR_SOURCE_PRESETS[0])
+    st.session_state.setdefault("portfolio_source_name", "なし")
+    st.session_state.setdefault("factor_comparison_rows", [])
+    st.session_state.setdefault("factor_weight_rows", [])
     st.session_state.setdefault("relationship_df", None)
     st.session_state.setdefault("relationship_table", None)
     st.session_state.setdefault("relationship_ticker_info", None)
@@ -180,11 +195,15 @@ def render_factor_tab() -> None:
     st.divider()
     st.subheader("マルチファクター寄与分析")
     st.write("Fama-French 系ファクターを使って、複数の景気・市場指標を並べて比較できます。")
+    factor_col1, factor_col2 = st.columns(2)
+    factor_source = factor_col1.selectbox("ファクター地域 / ソース", FACTOR_SOURCE_PRESETS, index=0, key="factor_source_select")
+    portfolio_source = factor_col2.selectbox("追加ポートフォリオデータ", PORTFOLIO_SOURCE_PRESETS, index=0, key="portfolio_source_select")
     with st.expander("この欄は何を見るのか"):
         st.markdown(
             """
             - ここは個別銘柄を入れる欄ではありません。
-            - 既に組み込まれている景気指標や市場指標に対して、Fama-French ファクターがどれくらい効いているかを見ます。
+            - 既に組み込まれている景気指標や市場指標、あるいはポートフォリオ収益率に対して、Fama-French ファクターがどれくらい効いているかを見ます。
+            - `Japan 5 Factors` や `North America 5 Factors` を切り替えて、地域ごとの差も比べられます。
             - 複数の対象を同時に選んで、どのファクターが効き方の違いを生んでいるかを比較できます。
             - 個別銘柄や自分のポートフォリオに広げるなら、次の段階で別入力欄を追加するのが自然です。
             """
@@ -192,37 +211,46 @@ def render_factor_tab() -> None:
 
     if st.button("ファクターデータを取得 / 更新する", type="primary"):
         with st.spinner("データ取得とラグ分析を進めています..."):
-            df_master = load_factor_data()
+            df_master = load_factor_data(factor_source, portfolio_source)
 
             if df_master.empty:
                 st.error("データ取得に失敗しました。ネットワーク接続やデータソースを確認してください。")
                 st.session_state["factor_df_master"] = None
                 st.session_state["factor_lag_results"] = None
                 st.session_state["factor_available_targets"] = []
+                st.session_state["factor_comparison_rows"] = []
+                st.session_state["factor_weight_rows"] = []
                 return
 
-            available_targets = [col for col in ["DI_Coincident", "CI_Coincident", "VIX", "USD_JPY"] if col in df_master.columns]
+            available_targets = [col for col in df_master.columns if col not in FIVE_FACTOR_COLUMNS + ["RF"]]
             if not available_targets:
                 st.error("分析対象となるターゲット指標が見つかりませんでした。")
                 st.session_state["factor_df_master"] = None
                 st.session_state["factor_lag_results"] = None
                 st.session_state["factor_available_targets"] = []
+                st.session_state["factor_comparison_rows"] = []
+                st.session_state["factor_weight_rows"] = []
                 return
 
             from src.analyzer import EconomicAnalyzer
 
-            analyzer = EconomicAnalyzer(df_master)
+            analyzer = EconomicAnalyzer(df_master, factors=FIVE_FACTOR_COLUMNS)
             lag_results = analyzer.analyze_multi_targets(available_targets)
             st.session_state["factor_df_master"] = df_master
             st.session_state["factor_lag_results"] = lag_results
             st.session_state["factor_available_targets"] = available_targets
+            st.session_state["factor_source_name"] = factor_source
+            st.session_state["portfolio_source_name"] = portfolio_source
 
     factor_df_master = st.session_state.get("factor_df_master")
     factor_lag_results = st.session_state.get("factor_lag_results")
     factor_available_targets = st.session_state.get("factor_available_targets", [])
 
     if factor_df_master is not None and factor_lag_results:
-        st.success(f"{len(factor_df_master)} ヶ月分のデータを取得済みです。分析対象を切り替えられます。")
+        st.success(
+            f"{len(factor_df_master)} ヶ月分のデータを取得済みです。"
+            f" ファクター: {st.session_state.get('factor_source_name')} / 追加データ: {st.session_state.get('portfolio_source_name')}"
+        )
         selected_targets = st.multiselect(
             "比較したい分析対象データ",
             factor_available_targets,
@@ -238,9 +266,11 @@ def render_factor_tab() -> None:
         from src.analyzer import EconomicAnalyzer
         from src.modeler import EconomicModeler
 
-        analyzer = EconomicAnalyzer(factor_df_master)
+        analyzer = EconomicAnalyzer(factor_df_master, factors=FIVE_FACTOR_COLUMNS)
         analyzer.results = factor_lag_results
         factor_tabs = st.tabs(selected_targets)
+        comparison_rows = []
+        weight_rows = []
 
         for tab, target in zip(factor_tabs, selected_targets):
             with tab:
@@ -263,6 +293,23 @@ def render_factor_tab() -> None:
                     st.warning("モデル学習に必要なデータが不足しています。")
                     continue
 
+                comparison_rows.append(
+                    {
+                        "target": target,
+                        "r_squared": results["r_squared"],
+                        "samples": len(df_aligned),
+                    }
+                )
+                for item in results["contributions"]:
+                    weight_rows.append(
+                        {
+                            "target": target,
+                            "factor": item["factor"],
+                            "weight": item["weight"],
+                            "impact": item["impact"],
+                        }
+                    )
+
                 contribution_df = pd.DataFrame(results["contributions"])
                 fig = px.bar(
                     contribution_df,
@@ -273,6 +320,29 @@ def render_factor_tab() -> None:
                 )
                 st.plotly_chart(fig, use_container_width=True)
                 st.metric("R^2", f"{results['r_squared']:.3f}")
+
+        st.session_state["factor_comparison_rows"] = comparison_rows
+        st.session_state["factor_weight_rows"] = weight_rows
+
+        if comparison_rows:
+            st.markdown("**比較サマリー**")
+            comparison_df = pd.DataFrame(comparison_rows).sort_values("r_squared", ascending=False)
+            st.dataframe(comparison_df, use_container_width=True)
+
+        if weight_rows:
+            st.markdown("**ファクター感応度の比較**")
+            weight_df = pd.DataFrame(weight_rows)
+            pivot_df = weight_df.pivot(index="target", columns="factor", values="weight").reset_index()
+            heatmap_df = weight_df.pivot(index="target", columns="factor", values="weight")
+            st.dataframe(pivot_df, use_container_width=True)
+            heatmap = px.imshow(
+                heatmap_df,
+                aspect="auto",
+                color_continuous_scale="RdBu",
+                origin="lower",
+                title="ターゲット別ファクター荷重ヒートマップ",
+            )
+            st.plotly_chart(heatmap, use_container_width=True)
     else:
         st.info("上のボタンでデータを取得すると、ここで分析対象を切り替えられます。")
 
@@ -328,9 +398,15 @@ def render_regime_tab() -> None:
     wavelet_window = col6.slider("Wavelet 窓(月)", min_value=24, max_value=96, value=48, step=12)
     wavelet_name = col7.selectbox("Wavelet の種類", list(WAVELET_OPTIONS.keys()), index=0, format_func=lambda x: WAVELET_OPTIONS[x])
 
+    use_factor_features = st.checkbox("レジーム推定にマルチファクター特徴量も加える", value=False)
+    regime_factor_source = None
+    if use_factor_features:
+        regime_factor_source = st.selectbox("レジーム側で使うファクター地域", FACTOR_SOURCE_PRESETS, index=0, key="regime_factor_source")
+
     if st.button("レジーム分析を実行する", type="primary"):
         with st.spinner("価格データ取得とレジーム推定を進めています..."):
             prices = load_regime_data(ticker, start_date)
+            extra_features = load_factor_feature_frame(regime_factor_source) if use_factor_features and regime_factor_source else None
             features = build_regime_features(
                 prices,
                 growth_target=growth_target,
@@ -339,6 +415,7 @@ def render_regime_tab() -> None:
                 wavelet_name=wavelet_name,
                 growth_target_mode=growth_mode,
                 candidate_targets=candidate_targets,
+                extra_features=extra_features,
             )
             model = WaveletHMMRegimeModel(n_states=int(n_states))
             result = model.fit_predict(features)
