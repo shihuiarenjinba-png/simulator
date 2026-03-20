@@ -78,6 +78,92 @@ REGIME_LABELS_JA = {
 }
 
 
+def apply_base_styles() -> None:
+    st.markdown(
+        """
+        <style>
+        .main .block-container {
+            padding-top: 2rem;
+            padding-bottom: 3rem;
+        }
+        .hero-card {
+            background: linear-gradient(135deg, #f8fbff 0%, #fff7f0 100%);
+            border: 1px solid #e8eef6;
+            border-radius: 20px;
+            padding: 1.25rem 1.35rem;
+            margin-bottom: 1rem;
+        }
+        .hero-card h1 {
+            margin: 0 0 0.45rem 0;
+            font-size: 2.2rem;
+            line-height: 1.15;
+        }
+        .hero-card p {
+            margin: 0;
+            color: #4a5568;
+            font-size: 1rem;
+        }
+        .soft-panel {
+            background: #fbfcfe;
+            border: 1px solid #e8eef6;
+            border-radius: 18px;
+            padding: 1rem 1.1rem;
+            margin: 0.4rem 0 1rem 0;
+        }
+        .section-kicker {
+            color: #f35b5b;
+            font-size: 0.85rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            margin-bottom: 0.2rem;
+        }
+        .section-title {
+            margin: 0;
+            font-size: 1.65rem;
+            line-height: 1.2;
+        }
+        .section-copy {
+            color: #5a6578;
+            margin-top: 0.45rem;
+            margin-bottom: 0;
+        }
+        .mini-note {
+            color: #6b7280;
+            font-size: 0.92rem;
+            margin-top: 0.35rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_section_header(kicker: str, title: str, copy: str) -> None:
+    st.markdown(
+        f"""
+        <div class="soft-panel">
+            <div class="section-kicker">{kicker}</div>
+            <h2 class="section-title">{title}</h2>
+            <p class="section-copy">{copy}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_page_hero() -> None:
+    st.markdown(
+        """
+        <div class="hero-card">
+            <h1>Market Factor Lab</h1>
+            <p>市場のつながり、マクロ要因、レジームの切り替わりを、1つの研究画面でゆっくり追えるように整えています。</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 @st.cache_data(show_spinner=False)
 def load_factor_data(factor_source: str, portfolio_source: str) -> pd.DataFrame:
     from src.data_loader import DataLoader
@@ -136,8 +222,12 @@ def get_selected_relationship_ticker() -> str:
 
 
 def render_factor_tab() -> None:
-    st.subheader("株価中心の影響マップ")
-    st.write("基準となる株価指数を中心にして、周辺の市場・経済指標がどう連動し、先行または遅行しているかを見ます。")
+    render_section_header(
+        "Step 1",
+        "市場のつながりを見る",
+        "まずは中心にしたい指数を1つ決めて、そのまわりで何が先に動いているかを見ます。",
+    )
+    st.caption("最初は `S&P 500` や `SPY` のままで十分です。あとから `N225` や `NASDAQ` に切り替えられます。")
 
     if MARKET_RELATIONSHIPS_IMPORT_ERROR is not None:
         st.warning(
@@ -191,6 +281,13 @@ def render_factor_tab() -> None:
             if relationship_table.empty:
                 st.warning("相関を計算できるだけのデータが集まりませんでした。")
             else:
+                top_row = relationship_table.iloc[0]
+                summary_col1, summary_col2, summary_col3 = st.columns(3)
+                summary_col1.metric("いちばん強く動いた指標", str(top_row["indicator"]))
+                summary_col2.metric("最大相関", f"{top_row['best_corr']:.3f}")
+                summary_col3.metric("時間差", f"{int(top_row['best_lag_months'])} ヶ月")
+                st.caption("ここではまず、いちばん関係が強かった指標を上に出しています。下のグラフで全体像を見られます。")
+
                 fig = px.bar(
                     relationship_table,
                     x="best_corr",
@@ -198,13 +295,13 @@ def render_factor_tab() -> None:
                     color="relationship_type",
                     orientation="h",
                     hover_data=["same_month_corr", "best_lag_months", "impact_direction"],
-                    title="中心指数に対する周辺指標の影響",
+                    title="どの指標が、どれくらい強く連動しているか",
                 )
                 fig.update_layout(yaxis_title="周辺指標", xaxis_title="最大相関")
                 st.plotly_chart(fig, width="stretch")
 
                 selected_indicator = st.selectbox(
-                    "ラグの形を見る指標",
+                    "動き方を詳しく見る指標",
                     relationship_table["indicator"].tolist(),
                     key="lag_profile_indicator",
                 )
@@ -214,26 +311,29 @@ def render_factor_tab() -> None:
                     x="lag_months",
                     y="correlation",
                     markers=True,
-                    title=f"{selected_indicator} と {base_ticker} の先行・遅行プロファイル",
+                    title=f"{selected_indicator} が先に動くのか、あとに動くのか",
                 )
                 lag_fig.update_layout(xaxis_title="ラグ(月)  正なら先行 / 負なら遅行", yaxis_title="相関")
                 st.plotly_chart(lag_fig, width="stretch")
 
-                st.markdown("**相関・先行遅行テーブル**")
+                st.markdown("**くわしい一覧**")
                 st.dataframe(relationship_table, width="stretch")
 
-                with st.expander("現在使っている周辺指標"):
+                with st.expander("いま比較に使っている周辺指標を見る"):
                     st.write(DEFAULT_MARKET_INDICATORS)
         else:
             st.info("まずは株価指数を1つ決めて、周辺の株価指数や経済指標との関係を見られます。")
 
     st.divider()
-    st.subheader("マルチファクター寄与分析")
-    st.write("Fama-French 系ファクターを使って、複数の景気・市場指標を並べて比較できます。")
+    render_section_header(
+        "Step 2",
+        "ファクターで分解する",
+        "次に、景気や市場の指標がどのファクターに反応しやすいかをまとめて見ます。",
+    )
     factor_col1, factor_col2 = st.columns(2)
-    factor_source = factor_col1.selectbox("ファクター地域 / ソース", FACTOR_SOURCE_PRESETS, index=0, key="factor_source_select")
-    portfolio_source = factor_col2.selectbox("追加ポートフォリオデータ", PORTFOLIO_SOURCE_PRESETS, index=0, key="portfolio_source_select")
-    with st.expander("この欄は何を見るのか"):
+    factor_source = factor_col1.selectbox("使うファクターデータ", FACTOR_SOURCE_PRESETS, index=0, key="factor_source_select")
+    portfolio_source = factor_col2.selectbox("追加で合わせるデータ", PORTFOLIO_SOURCE_PRESETS, index=0, key="portfolio_source_select")
+    with st.expander("この欄で分かること"):
         st.markdown(
             """
             - ここは個別銘柄を入れる欄ではありません。
@@ -357,8 +457,13 @@ def render_factor_tab() -> None:
             st.session_state["factor_weight_rows"] = weight_rows
 
             if comparison_rows:
-                st.markdown("**比較サマリー**")
                 comparison_df = pd.DataFrame(comparison_rows).sort_values("r_squared", ascending=False)
+                top_factor_target = comparison_df.iloc[0]
+                factor_summary1, factor_summary2, factor_summary3 = st.columns(3)
+                factor_summary1.metric("いちばん説明しやすい対象", str(top_factor_target["target"]))
+                factor_summary2.metric("R^2", f"{top_factor_target['r_squared']:.3f}")
+                factor_summary3.metric("サンプル数", f"{int(top_factor_target['samples'])}")
+                st.markdown("**比較サマリー**")
                 st.dataframe(comparison_df, width="stretch")
 
             if weight_rows:
@@ -379,8 +484,11 @@ def render_factor_tab() -> None:
         st.info("上のボタンでデータを取得すると、ここで分析対象を切り替えられます。")
 
     st.divider()
-    st.subheader("マクロ指数影響分析")
-    st.write("市場に対して、景気指数や為替・ボラティリティといったマクロ系列がどの程度影響しているかを見ます。")
+    render_section_header(
+        "Step 3",
+        "マクロの影響を見る",
+        "最後に、景気指数や為替、VIX のようなマクロ系列が市場にどう効いているかを見ます。",
+    )
     macro_target_ticker = get_selected_relationship_ticker()
     macro_start_date = st.session_state.get("relationship_start", "2000-01-01")
     st.caption(
@@ -441,6 +549,12 @@ def render_factor_tab() -> None:
         if macro_relationship_table.empty:
             st.warning("マクロ系列との相関を計算できるだけのデータが集まりませんでした。")
         else:
+            macro_top = macro_relationship_table.iloc[0]
+            macro_summary1, macro_summary2, macro_summary3 = st.columns(3)
+            macro_summary1.metric("いちばん効いている系列", str(macro_top["indicator_label"]))
+            macro_summary2.metric("最大相関", f"{macro_top['best_corr']:.3f}")
+            macro_summary3.metric("先行月数", f"{int(macro_top['best_lag_months'])} ヶ月")
+
             macro_fig = px.bar(
                 macro_relationship_table,
                 x="best_corr",
@@ -448,12 +562,12 @@ def render_factor_tab() -> None:
                 color="impact_direction",
                 orientation="h",
                 hover_data=["same_month_corr", "best_lag_months"],
-                title="マクロ系列の先行影響",
+                title="どのマクロ系列が市場に効いているか",
             )
             macro_fig.update_layout(yaxis_title="マクロ系列", xaxis_title="最大相関")
             st.plotly_chart(macro_fig, width="stretch")
 
-            st.markdown("**マクロ先行相関テーブル**")
+            st.markdown("**くわしい一覧**")
             st.dataframe(
                 macro_relationship_table[
                     ["indicator_label", "same_month_corr", "best_corr", "best_lag_months", "impact_direction"]
@@ -469,7 +583,7 @@ def render_factor_tab() -> None:
                     x="factor_label",
                     y="weight",
                     color="weight",
-                    title="マクロ系列の回帰寄与",
+                    title="回帰で見たときの効き方",
                 )
                 st.plotly_chart(contrib_fig, width="stretch")
                 metric_col1, metric_col2 = st.columns(2)
@@ -480,10 +594,13 @@ def render_factor_tab() -> None:
 
 
 def render_regime_tab() -> None:
-    st.subheader("Wavelet / HMM レジーム研究")
-    st.write("長期成長率、Wavelet の窓、隠れ状態モデルを組み合わせて、いまの市場局面を見ます。")
+    render_section_header(
+        "Step 4",
+        "市場の局面を読む",
+        "ここでは値動きのうねりと長期成長のズレを合わせて、いまの相場がどの局面に近いかを見ます。",
+    )
 
-    with st.expander("用語の意味"):
+    with st.expander("はじめて見るときの説明"):
         st.markdown(
             """
             - `Wavelet`: 値動きを周波数ごとに分けて、短期ノイズと中期のうねりを分けて見る方法です。
@@ -505,11 +622,10 @@ def render_regime_tab() -> None:
         )
     st.caption("ここで出る線や局面は探索的な研究結果です。これだけで平均回帰が正式に証明されたことにはなりません。正式な検証には、外部期間テストや感度分析が必要です。")
 
-    col1, col2, col3, col4 = st.columns(4)
-    ticker = col1.text_input("Ticker", value="^GSPC")
-    start_date = col2.text_input("Start Date", value="1990-01-01")
-    growth_mode = col3.radio("成長率の決め方", options=["fixed", "auto"], format_func=lambda x: "固定値" if x == "fixed" else "自動特定", horizontal=True)
-    n_states = col4.number_input("隠れ状態の数", min_value=2, max_value=6, value=3, step=1)
+    basic_col1, basic_col2, basic_col3 = st.columns([1, 1, 1.3])
+    ticker = basic_col1.text_input("中心に見る指数", value="^GSPC")
+    start_date = basic_col2.text_input("分析開始日", value="1990-01-01")
+    growth_mode = basic_col3.radio("成長率の決め方", options=["fixed", "auto"], format_func=lambda x: "固定値" if x == "fixed" else "自動特定", horizontal=True)
 
     if growth_mode == "fixed":
         growth_target = st.number_input("固定の長期成長率", min_value=-0.2, max_value=0.3, value=0.06, step=0.01)
@@ -525,23 +641,37 @@ def render_regime_tab() -> None:
         if not candidate_targets:
             candidate_targets = [0.03, 0.06]
 
-    col5, col6, col7 = st.columns(3)
-    trend_window = col5.slider("基準トレンド窓(月)", min_value=36, max_value=180, value=120, step=12)
-    wavelet_window = col6.slider("Wavelet 窓(月)", min_value=24, max_value=96, value=48, step=12)
-    wavelet_name = col7.selectbox("Wavelet の種類", list(WAVELET_OPTIONS.keys()), index=0, format_func=lambda x: WAVELET_OPTIONS[x])
+    with st.expander("詳細設定を開く"):
+        detail_col1, detail_col2, detail_col3 = st.columns(3)
+        trend_window = detail_col1.slider("長期トレンドを見る長さ(月)", min_value=36, max_value=180, value=120, step=12)
+        wavelet_window = detail_col2.slider("波の形を見る長さ(月)", min_value=24, max_value=96, value=48, step=12)
+        wavelet_name = detail_col3.selectbox("Wavelet の種類", list(WAVELET_OPTIONS.keys()), index=0, format_func=lambda x: WAVELET_OPTIONS[x])
 
-    use_factor_features = st.checkbox("レジーム推定にマルチファクター特徴量も加える", value=False)
-    regime_factor_source = None
-    if use_factor_features:
-        regime_factor_source = st.selectbox("レジーム側で使うファクター地域", FACTOR_SOURCE_PRESETS, index=0, key="regime_factor_source")
+        n_states = st.number_input("局面を何種類に分けるか", min_value=2, max_value=6, value=3, step=1)
 
-    use_macro_features = st.checkbox("レジーム推定にマクロ指数特徴量も加える", value=True)
-    macro_feature_top_n = None
-    macro_feature_max_lag = None
-    if use_macro_features:
-        macro_col1, macro_col2 = st.columns(2)
-        macro_feature_top_n = macro_col1.slider("レジームに入れる上位マクロ系列数", min_value=2, max_value=8, value=4, step=1, key="regime_macro_top_n")
-        macro_feature_max_lag = macro_col2.slider("マクロ先行ラグ上限(月)", min_value=1, max_value=18, value=12, step=1, key="regime_macro_max_lag")
+        use_factor_features = st.checkbox("レジーム推定にマルチファクター特徴量も加える", value=False)
+        regime_factor_source = None
+        if use_factor_features:
+            regime_factor_source = st.selectbox("レジーム側で使うファクター地域", FACTOR_SOURCE_PRESETS, index=0, key="regime_factor_source")
+
+        use_macro_features = st.checkbox("レジーム推定にマクロ指数特徴量も加える", value=True)
+        macro_feature_top_n = None
+        macro_feature_max_lag = None
+        if use_macro_features:
+            macro_col1, macro_col2 = st.columns(2)
+            macro_feature_top_n = macro_col1.slider("レジームに入れる上位マクロ系列数", min_value=2, max_value=8, value=4, step=1, key="regime_macro_top_n")
+            macro_feature_max_lag = macro_col2.slider("マクロ先行ラグ上限(月)", min_value=1, max_value=18, value=12, step=1, key="regime_macro_max_lag")
+
+    if "trend_window" not in locals():
+        trend_window = 120
+        wavelet_window = 48
+        wavelet_name = "db2"
+        n_states = 3
+        use_factor_features = False
+        regime_factor_source = None
+        use_macro_features = True
+        macro_feature_top_n = 4
+        macro_feature_max_lag = 12
 
     if st.button("レジーム分析を実行する", type="primary"):
         with st.spinner("価格データ取得とレジーム推定を進めています..."):
@@ -605,7 +735,7 @@ def render_regime_tab() -> None:
                 )
 
                 chart_df = result.reset_index().rename(columns={"index": "Date"})
-                price_chart = px.line(chart_df, x="Date", y="matched_growth_rate", color="regime_label_ja", title="成長率の到達状況とレジーム")
+                price_chart = px.line(chart_df, x="Date", y="matched_growth_rate", color="regime_label_ja", title="いまの相場がどの局面に近いか")
                 price_chart.update_layout(yaxis_title="年率換算成長率", xaxis_title="日付")
                 st.plotly_chart(price_chart, width="stretch")
 
@@ -613,12 +743,12 @@ def render_regime_tab() -> None:
                     chart_df,
                     x="Date",
                     y=["active_growth_target", "matched_growth_rate"],
-                    title="目標成長率と実現成長率",
+                    title="目標の成長率と、実際の到達度",
                 )
                 target_chart.update_layout(yaxis_title="年率", xaxis_title="日付")
                 st.plotly_chart(target_chart, width="stretch")
 
-                st.markdown("**Recent regime states**")
+                st.markdown("**直近の状態一覧**")
                 st.dataframe(
                     result.tail(24)[
                         [
@@ -642,12 +772,15 @@ def render_regime_tab() -> None:
                 )
                 st.caption("Yahoo Finance の一時的なレート制限が原因のことがあります。少し時間を空けて再実行してください。")
     else:
-        st.info("パラメータを調整してから実行すると、結果を CSV に保存します。")
+        st.info("まずはこのまま実行してみて、必要になったら詳細設定を開く使い方がおすすめです。")
 
 
 def render_notes_tab() -> None:
-    st.subheader("Model Notes")
-    st.write("この研究版では、以下の論点を今後拡張できます。")
+    render_section_header(
+        "Notes",
+        "研究メモ",
+        "この画面の次に広げられそうな論点を、メモとして残しています。",
+    )
     st.markdown(
         """
         - 株価指数を中心にして、周辺の市場・経済指標との相関マップを広げる
@@ -660,11 +793,20 @@ def render_notes_tab() -> None:
 
 def main() -> None:
     ensure_app_state()
-    st.title("Market Factor Lab")
-    st.caption("既存のファクター分析と、Wavelet / HMM レジーム研究を1つの画面から試せます。")
+    apply_base_styles()
+    render_page_hero()
+    st.markdown(
+        """
+        <div class="soft-panel">
+            <div class="section-kicker">How To Use</div>
+            <p class="section-copy">上から順に、1. 市場のつながりを見る → 2. ファクターやマクロで分解する → 3. レジームで局面を読む、という流れで使うと自然です。</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     factor_tab, regime_tab, notes_tab = st.tabs(
-        ["影響マップ", "レジーム研究", "設計メモ"]
+        ["市場を分解する", "局面を読む", "研究メモ"]
     )
 
     with factor_tab:
