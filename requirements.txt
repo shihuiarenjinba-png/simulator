@@ -5,6 +5,8 @@ yfinance>=0.2.0
 reportlab
 statsmodels
 scikit-learn
+hmmlearn
+PyWavelets
 pandas-datareader
 requests
 openpyxl
