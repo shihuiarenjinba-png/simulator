@@ -21,6 +21,7 @@ try:
         DEFAULT_MARKET_INDICATORS,
         compute_lag_profile,
         compute_lead_lag_relationships,
+        describe_ticker,
         load_market_relationship_frame,
     )
     MARKET_RELATIONSHIPS_IMPORT_ERROR = None
@@ -35,6 +36,9 @@ except Exception as exc:
         raise RuntimeError("market_relationships module is unavailable") from MARKET_RELATIONSHIPS_IMPORT_ERROR
 
     def compute_lag_profile(*args, **kwargs):
+        raise RuntimeError("market_relationships module is unavailable") from MARKET_RELATIONSHIPS_IMPORT_ERROR
+
+    def describe_ticker(*args, **kwargs):
         raise RuntimeError("market_relationships module is unavailable") from MARKET_RELATIONSHIPS_IMPORT_ERROR
 
 
@@ -87,9 +91,12 @@ def render_factor_tab() -> None:
         top_col1, top_col2 = st.columns([1, 1])
         base_ticker = top_col1.text_input("中心に置く株価指数", value="^GSPC")
         relationship_start = top_col2.text_input("分析開始日", value="2000-01-01", key="relationship_start")
+        st.caption("例: `^GSPC`, `SP500`, `NASDAQ`, `N225`, `VIX`, `USD/JPY` のような入力でも自動解釈します。")
 
         if st.button("影響マップを作成する", type="primary"):
             with st.spinner("周辺指標との相関・先行遅行を計算しています..."):
+                ticker_info = describe_ticker(base_ticker)
+                st.info(f"入力 `{ticker_info['input']}` を `{ticker_info['label']}` (`{ticker_info['normalized']}`) として分析します。")
                 relationship_df = load_relationship_data(base_ticker, relationship_start)
                 relationship_table = compute_lead_lag_relationships(relationship_df, base_col="base_asset", max_lag=6)
 
@@ -132,6 +139,15 @@ def render_factor_tab() -> None:
     st.divider()
     st.subheader("既存のファクター寄与分析")
     st.write("Fama-French 系ファクターと景気指標の関係も、従来どおり確認できます。")
+    with st.expander("この欄は何を見るのか"):
+        st.markdown(
+            """
+            - ここは個別銘柄を入れる欄ではありません。
+            - 既に組み込まれている景気指標や市場指標に対して、Fama-French ファクターがどれくらい効いているかを見ます。
+            - たとえば `VIX` や `USD_JPY` や `DI_Coincident` を対象にして、どのファクターが先行しやすいかを確認する用途です。
+            - 個別銘柄や自分のポートフォリオに広げるなら、次の段階で別入力欄を追加するのが自然です。
+            """
+        )
 
     if st.button("ファクターデータを取得して分析する", type="primary"):
         with st.spinner("データ取得とラグ分析を進めています..."):
@@ -200,6 +216,17 @@ def render_regime_tab() -> None:
             - `db2 / db4 / haar / sym4`: Wavelet の種類で、値動きのどの形を強調するかが少し変わります。
             - `HMM`: 隠れマルコフモデルです。表面の価格変動の裏にある「上昇局面・転換局面・下落局面」のような見えない状態を推定します。
             - `グロースターゲット`: 長期で達成したい年率成長の基準です。
+            """
+        )
+    with st.expander("この画面の使い方"):
+        st.markdown(
+            """
+            - `Ticker`: 分析したい中心資産です。`^GSPC` や `N225` のように入れます。
+            - `成長率の決め方`: 固定値は常に同じ基準で見ます。自動特定は 3% や 6% に近い窓を毎回探します。
+            - `隠れ状態の数`: 市場局面を何種類に分けるかです。まずは 3 が無難です。
+            - `基準トレンド窓`: 長期基準を見る長さです。
+            - `Wavelet 窓`: 値動きの波形を見る長さです。
+            - `レジーム分析を実行する`: 下のグラフと表を更新して、CSV も保存します。
             """
         )
 
