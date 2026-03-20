@@ -16,6 +16,13 @@ from src.regime_data import RegimeDataLoader
 from src.regime_features import build_regime_features
 from src.regime_model import WaveletHMMRegimeModel
 from src.factor_library import FACTOR_DATASETS, FIVE_FACTOR_COLUMNS, PORTFOLIO_DATASETS
+from src.macro_analysis import (
+    build_macro_regime_features,
+    build_macro_regression_dataset,
+    compute_macro_lead_lag_relationships,
+    fit_macro_regression,
+    load_macro_relationship_frame,
+)
 
 try:
     from src.market_relationships import (
@@ -97,6 +104,11 @@ def load_relationship_data(base_ticker: str, start_date: str) -> pd.DataFrame:
     return load_market_relationship_frame(base_ticker=base_ticker, start_date=start_date)
 
 
+@st.cache_data(show_spinner=False)
+def load_macro_relationship_data(base_ticker: str, start_date: str) -> pd.DataFrame:
+    return load_macro_relationship_frame(base_ticker=base_ticker, start_date=start_date)
+
+
 def ensure_app_state() -> None:
     st.session_state.setdefault("factor_df_master", None)
     st.session_state.setdefault("factor_lag_results", None)
@@ -108,6 +120,18 @@ def ensure_app_state() -> None:
     st.session_state.setdefault("relationship_df", None)
     st.session_state.setdefault("relationship_table", None)
     st.session_state.setdefault("relationship_ticker_info", None)
+    st.session_state.setdefault("macro_relationship_df", None)
+    st.session_state.setdefault("macro_relationship_table", None)
+    st.session_state.setdefault("macro_regression_result", None)
+    st.session_state.setdefault("macro_ticker_info", None)
+
+
+def get_selected_relationship_ticker() -> str:
+    preset_label = st.session_state.get("relationship_base_preset", list(BASE_TICKER_PRESETS.keys())[0])
+    preset_value = BASE_TICKER_PRESETS.get(preset_label, "^GSPC")
+    if preset_value == "__custom__":
+        return st.session_state.get("relationship_custom_ticker", "^GSPC")
+    return preset_value
 
 
 def render_factor_tab() -> None:
@@ -166,7 +190,7 @@ def render_factor_tab() -> None:
                     title="中心指数に対する周辺指標の影響",
                 )
                 fig.update_layout(yaxis_title="周辺指標", xaxis_title="最大相関")
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
                 selected_indicator = st.selectbox(
                     "ラグの形を見る指標",
@@ -182,10 +206,10 @@ def render_factor_tab() -> None:
                     title=f"{selected_indicator} と {base_ticker} の先行・遅行プロファイル",
                 )
                 lag_fig.update_layout(xaxis_title="ラグ(月)  正なら先行 / 負なら遅行", yaxis_title="相関")
-                st.plotly_chart(lag_fig, use_container_width=True)
+                st.plotly_chart(lag_fig, width="stretch")
 
                 st.markdown("**相関・先行遅行テーブル**")
-                st.dataframe(relationship_table, use_container_width=True)
+                st.dataframe(relationship_table, width="stretch")
 
                 with st.expander("現在使っている周辺指標"):
                     st.write(DEFAULT_MARKET_INDICATORS)
@@ -220,27 +244,25 @@ def render_factor_tab() -> None:
                 st.session_state["factor_available_targets"] = []
                 st.session_state["factor_comparison_rows"] = []
                 st.session_state["factor_weight_rows"] = []
-                return
+            else:
+                available_targets = [col for col in df_master.columns if col not in FIVE_FACTOR_COLUMNS + ["RF"]]
+                if not available_targets:
+                    st.error("分析対象となるターゲット指標が見つかりませんでした。")
+                    st.session_state["factor_df_master"] = None
+                    st.session_state["factor_lag_results"] = None
+                    st.session_state["factor_available_targets"] = []
+                    st.session_state["factor_comparison_rows"] = []
+                    st.session_state["factor_weight_rows"] = []
+                else:
+                    from src.analyzer import EconomicAnalyzer
 
-            available_targets = [col for col in df_master.columns if col not in FIVE_FACTOR_COLUMNS + ["RF"]]
-            if not available_targets:
-                st.error("分析対象となるターゲット指標が見つかりませんでした。")
-                st.session_state["factor_df_master"] = None
-                st.session_state["factor_lag_results"] = None
-                st.session_state["factor_available_targets"] = []
-                st.session_state["factor_comparison_rows"] = []
-                st.session_state["factor_weight_rows"] = []
-                return
-
-            from src.analyzer import EconomicAnalyzer
-
-            analyzer = EconomicAnalyzer(df_master, factors=FIVE_FACTOR_COLUMNS)
-            lag_results = analyzer.analyze_multi_targets(available_targets)
-            st.session_state["factor_df_master"] = df_master
-            st.session_state["factor_lag_results"] = lag_results
-            st.session_state["factor_available_targets"] = available_targets
-            st.session_state["factor_source_name"] = factor_source
-            st.session_state["portfolio_source_name"] = portfolio_source
+                    analyzer = EconomicAnalyzer(df_master, factors=FIVE_FACTOR_COLUMNS)
+                    lag_results = analyzer.analyze_multi_targets(available_targets)
+                    st.session_state["factor_df_master"] = df_master
+                    st.session_state["factor_lag_results"] = lag_results
+                    st.session_state["factor_available_targets"] = available_targets
+                    st.session_state["factor_source_name"] = factor_source
+                    st.session_state["portfolio_source_name"] = portfolio_source
 
     factor_df_master = st.session_state.get("factor_df_master")
     factor_lag_results = st.session_state.get("factor_lag_results")
@@ -257,94 +279,167 @@ def render_factor_tab() -> None:
             default=factor_available_targets[: min(2, len(factor_available_targets))],
             key="factor_target_multi",
         )
-        st.dataframe(factor_df_master.tail(12), use_container_width=True)
+        st.dataframe(factor_df_master.tail(12), width="stretch")
 
         if not selected_targets:
             st.info("少なくとも1つ分析対象を選ぶと、下に寄与分析が出ます。")
-            return
+        else:
+            from src.analyzer import EconomicAnalyzer
+            from src.modeler import EconomicModeler
 
-        from src.analyzer import EconomicAnalyzer
-        from src.modeler import EconomicModeler
+            analyzer = EconomicAnalyzer(factor_df_master, factors=FIVE_FACTOR_COLUMNS)
+            analyzer.results = factor_lag_results
+            factor_tabs = st.tabs(selected_targets)
+            comparison_rows = []
+            weight_rows = []
 
-        analyzer = EconomicAnalyzer(factor_df_master, factors=FIVE_FACTOR_COLUMNS)
-        analyzer.results = factor_lag_results
-        factor_tabs = st.tabs(selected_targets)
-        comparison_rows = []
-        weight_rows = []
+            for tab, target in zip(factor_tabs, selected_targets):
+                with tab:
+                    if target not in factor_lag_results:
+                        st.warning(f"{target} のラグ分析結果がありません。")
+                        continue
 
-        for tab, target in zip(factor_tabs, selected_targets):
-            with tab:
-                if target not in factor_lag_results:
-                    st.warning(f"{target} のラグ分析結果がありません。")
-                    continue
+                    lag_table = pd.DataFrame(factor_lag_results[target]).T.reset_index().rename(columns={"index": "factor"})
+                    st.markdown("**最適ラグの候補**")
+                    st.dataframe(lag_table, width="stretch")
 
-                lag_table = pd.DataFrame(factor_lag_results[target]).T.reset_index().rename(columns={"index": "factor"})
-                st.markdown("**最適ラグの候補**")
-                st.dataframe(lag_table, use_container_width=True)
+                    df_aligned = analyzer.get_lagged_dataset(target)
+                    if df_aligned is None or df_aligned.empty:
+                        st.warning("モデリング用データが作成できませんでした。")
+                        continue
 
-                df_aligned = analyzer.get_lagged_dataset(target)
-                if df_aligned is None or df_aligned.empty:
-                    st.warning("モデリング用データが作成できませんでした。")
-                    continue
+                    modeler = EconomicModeler(df_aligned)
+                    results = modeler.train_model()
+                    if not results:
+                        st.warning("モデル学習に必要なデータが不足しています。")
+                        continue
 
-                modeler = EconomicModeler(df_aligned)
-                results = modeler.train_model()
-                if not results:
-                    st.warning("モデル学習に必要なデータが不足しています。")
-                    continue
-
-                comparison_rows.append(
-                    {
-                        "target": target,
-                        "r_squared": results["r_squared"],
-                        "samples": len(df_aligned),
-                    }
-                )
-                for item in results["contributions"]:
-                    weight_rows.append(
+                    comparison_rows.append(
                         {
                             "target": target,
-                            "factor": item["factor"],
-                            "weight": item["weight"],
-                            "impact": item["impact"],
+                            "r_squared": results["r_squared"],
+                            "samples": len(df_aligned),
                         }
                     )
+                    for item in results["contributions"]:
+                        weight_rows.append(
+                            {
+                                "target": target,
+                                "factor": item["factor"],
+                                "weight": item["weight"],
+                                "impact": item["impact"],
+                            }
+                        )
 
-                contribution_df = pd.DataFrame(results["contributions"])
-                fig = px.bar(
-                    contribution_df,
-                    x="factor",
-                    y="weight",
-                    color="weight",
-                    title=f"{target} に対するファクター寄与",
+                    contribution_df = pd.DataFrame(results["contributions"])
+                    fig = px.bar(
+                        contribution_df,
+                        x="factor",
+                        y="weight",
+                        color="weight",
+                        title=f"{target} に対するファクター寄与",
+                    )
+                    st.plotly_chart(fig, width="stretch")
+                    st.metric("R^2", f"{results['r_squared']:.3f}")
+
+            st.session_state["factor_comparison_rows"] = comparison_rows
+            st.session_state["factor_weight_rows"] = weight_rows
+
+            if comparison_rows:
+                st.markdown("**比較サマリー**")
+                comparison_df = pd.DataFrame(comparison_rows).sort_values("r_squared", ascending=False)
+                st.dataframe(comparison_df, width="stretch")
+
+            if weight_rows:
+                st.markdown("**ファクター感応度の比較**")
+                weight_df = pd.DataFrame(weight_rows)
+                pivot_df = weight_df.pivot(index="target", columns="factor", values="weight").reset_index()
+                heatmap_df = weight_df.pivot(index="target", columns="factor", values="weight")
+                st.dataframe(pivot_df, width="stretch")
+                heatmap = px.imshow(
+                    heatmap_df,
+                    aspect="auto",
+                    color_continuous_scale="RdBu",
+                    origin="lower",
+                    title="ターゲット別ファクター荷重ヒートマップ",
                 )
-                st.plotly_chart(fig, use_container_width=True)
-                st.metric("R^2", f"{results['r_squared']:.3f}")
-
-        st.session_state["factor_comparison_rows"] = comparison_rows
-        st.session_state["factor_weight_rows"] = weight_rows
-
-        if comparison_rows:
-            st.markdown("**比較サマリー**")
-            comparison_df = pd.DataFrame(comparison_rows).sort_values("r_squared", ascending=False)
-            st.dataframe(comparison_df, use_container_width=True)
-
-        if weight_rows:
-            st.markdown("**ファクター感応度の比較**")
-            weight_df = pd.DataFrame(weight_rows)
-            pivot_df = weight_df.pivot(index="target", columns="factor", values="weight").reset_index()
-            heatmap_df = weight_df.pivot(index="target", columns="factor", values="weight")
-            st.dataframe(pivot_df, use_container_width=True)
-            heatmap = px.imshow(
-                heatmap_df,
-                aspect="auto",
-                color_continuous_scale="RdBu",
-                origin="lower",
-                title="ターゲット別ファクター荷重ヒートマップ",
-            )
-            st.plotly_chart(heatmap, use_container_width=True)
+                st.plotly_chart(heatmap, width="stretch")
     else:
         st.info("上のボタンでデータを取得すると、ここで分析対象を切り替えられます。")
+
+    st.divider()
+    st.subheader("マクロ指数影響分析")
+    st.write("市場に対して、景気指数や為替・ボラティリティといったマクロ系列がどの程度影響しているかを見ます。")
+    macro_target_ticker = get_selected_relationship_ticker()
+    macro_start_date = st.session_state.get("relationship_start", "2000-01-01")
+    st.caption(
+        f"現在は `{macro_target_ticker}` を対象に、景気一致指数・CI一致指数・VIX・USD/JPY の先行相関を調べます。"
+    )
+
+    macro_col1, macro_col2 = st.columns(2)
+    macro_max_lag = macro_col1.slider("マクロ先行ラグ上限(月)", min_value=1, max_value=18, value=12, step=1, key="macro_max_lag")
+    macro_top_n = macro_col2.slider("回帰に使う上位マクロ系列数", min_value=2, max_value=8, value=4, step=1, key="macro_top_n")
+
+    if st.button("マクロ指数分析を実行する", type="primary"):
+        with st.spinner("マクロ指数との先行相関と回帰寄与を計算しています..."):
+            macro_frame = load_macro_relationship_data(macro_target_ticker, macro_start_date)
+            macro_table = compute_macro_lead_lag_relationships(macro_frame, max_lag=macro_max_lag)
+            macro_regression_df = build_macro_regression_dataset(macro_frame, macro_table, top_n=macro_top_n) if not macro_table.empty else pd.DataFrame()
+            macro_regression_result = fit_macro_regression(macro_regression_df)
+            st.session_state["macro_relationship_df"] = macro_frame
+            st.session_state["macro_relationship_table"] = macro_table
+            st.session_state["macro_regression_result"] = macro_regression_result
+            st.session_state["macro_ticker_info"] = describe_ticker(macro_target_ticker)
+
+    macro_relationship_table = st.session_state.get("macro_relationship_table")
+    macro_regression_result = st.session_state.get("macro_regression_result")
+    macro_ticker_info = st.session_state.get("macro_ticker_info")
+
+    if macro_relationship_table is not None:
+        if macro_ticker_info:
+            st.success(
+                f"マクロ分析対象は `{macro_ticker_info['label']}` (`{macro_ticker_info['normalized']}`) です。"
+            )
+
+        if macro_relationship_table.empty:
+            st.warning("マクロ系列との相関を計算できるだけのデータが集まりませんでした。")
+        else:
+            macro_fig = px.bar(
+                macro_relationship_table,
+                x="best_corr",
+                y="indicator_label",
+                color="impact_direction",
+                orientation="h",
+                hover_data=["same_month_corr", "best_lag_months"],
+                title="マクロ系列の先行影響",
+            )
+            macro_fig.update_layout(yaxis_title="マクロ系列", xaxis_title="最大相関")
+            st.plotly_chart(macro_fig, width="stretch")
+
+            st.markdown("**マクロ先行相関テーブル**")
+            st.dataframe(
+                macro_relationship_table[
+                    ["indicator_label", "same_month_corr", "best_corr", "best_lag_months", "impact_direction"]
+                ],
+                width="stretch",
+            )
+
+            if macro_regression_result:
+                st.markdown("**マクロ回帰の寄与度**")
+                macro_contrib_df = pd.DataFrame(macro_regression_result["contributions"])
+                contrib_fig = px.bar(
+                    macro_contrib_df,
+                    x="factor_label",
+                    y="weight",
+                    color="weight",
+                    title="マクロ系列の回帰寄与",
+                )
+                st.plotly_chart(contrib_fig, width="stretch")
+                metric_col1, metric_col2 = st.columns(2)
+                metric_col1.metric("R^2", f"{macro_regression_result['r_squared']:.3f}")
+                metric_col2.metric("サンプル数", f"{macro_regression_result['samples']}")
+    else:
+        st.info("上のボタンでマクロ指数分析を実行すると、ここに先行相関と回帰寄与が表示されます。")
 
 
 def render_regime_tab() -> None:
@@ -403,10 +498,37 @@ def render_regime_tab() -> None:
     if use_factor_features:
         regime_factor_source = st.selectbox("レジーム側で使うファクター地域", FACTOR_SOURCE_PRESETS, index=0, key="regime_factor_source")
 
+    use_macro_features = st.checkbox("レジーム推定にマクロ指数特徴量も加える", value=True)
+    macro_feature_top_n = None
+    macro_feature_max_lag = None
+    if use_macro_features:
+        macro_col1, macro_col2 = st.columns(2)
+        macro_feature_top_n = macro_col1.slider("レジームに入れる上位マクロ系列数", min_value=2, max_value=8, value=4, step=1, key="regime_macro_top_n")
+        macro_feature_max_lag = macro_col2.slider("マクロ先行ラグ上限(月)", min_value=1, max_value=18, value=12, step=1, key="regime_macro_max_lag")
+
     if st.button("レジーム分析を実行する", type="primary"):
         with st.spinner("価格データ取得とレジーム推定を進めています..."):
             prices = load_regime_data(ticker, start_date)
-            extra_features = load_factor_feature_frame(regime_factor_source) if use_factor_features and regime_factor_source else None
+            extra_feature_frames = []
+            if use_factor_features and regime_factor_source:
+                factor_features = load_factor_feature_frame(regime_factor_source)
+                if factor_features is not None and not factor_features.empty:
+                    extra_feature_frames.append(factor_features)
+            if use_macro_features and macro_feature_top_n is not None and macro_feature_max_lag is not None:
+                macro_features = build_macro_regime_features(
+                    base_ticker=ticker,
+                    start_date=start_date,
+                    max_lag=macro_feature_max_lag,
+                    top_n=macro_feature_top_n,
+                )
+                if macro_features is not None and not macro_features.empty:
+                    extra_feature_frames.append(macro_features)
+
+            extra_features = None
+            if extra_feature_frames:
+                extra_features = pd.concat(extra_feature_frames, axis=1)
+                extra_features = extra_features.loc[~extra_features.index.duplicated(keep="first")].sort_index()
+
             features = build_regime_features(
                 prices,
                 growth_target=growth_target,
@@ -441,7 +563,7 @@ def render_regime_tab() -> None:
             chart_df = result.reset_index().rename(columns={"index": "Date"})
             price_chart = px.line(chart_df, x="Date", y="matched_growth_rate", color="regime_label_ja", title="成長率の到達状況とレジーム")
             price_chart.update_layout(yaxis_title="年率換算成長率", xaxis_title="日付")
-            st.plotly_chart(price_chart, use_container_width=True)
+            st.plotly_chart(price_chart, width="stretch")
 
             target_chart = px.line(
                 chart_df,
@@ -450,7 +572,7 @@ def render_regime_tab() -> None:
                 title="目標成長率と実現成長率",
             )
             target_chart.update_layout(yaxis_title="年率", xaxis_title="日付")
-            st.plotly_chart(target_chart, use_container_width=True)
+            st.plotly_chart(target_chart, width="stretch")
 
             st.markdown("**Recent regime states**")
             st.dataframe(
@@ -466,7 +588,7 @@ def render_regime_tab() -> None:
                         "regime_label_ja",
                     ]
                 ],
-                use_container_width=True,
+                width="stretch",
             )
             st.caption(f"CSV saved to {output_path}")
     else:
