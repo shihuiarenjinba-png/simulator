@@ -51,6 +51,15 @@ WAVELET_OPTIONS = {
     "sym4": "sym4: 対称性が高くノイズに比較的強い",
 }
 
+BASE_TICKER_PRESETS = {
+    "S&P 500 (^GSPC)": "^GSPC",
+    "SPY (ETF)": "SPY",
+    "Dow Jones (^DJI)": "^DJI",
+    "NASDAQ (^IXIC)": "^IXIC",
+    "Nikkei 225 (^N225)": "^N225",
+    "Custom": "__custom__",
+}
+
 REGIME_LABELS_JA = {
     "supportive_uptrend": "上昇を支える局面",
     "transition": "転換・様子見局面",
@@ -81,6 +90,9 @@ def ensure_app_state() -> None:
     st.session_state.setdefault("factor_df_master", None)
     st.session_state.setdefault("factor_lag_results", None)
     st.session_state.setdefault("factor_available_targets", [])
+    st.session_state.setdefault("relationship_df", None)
+    st.session_state.setdefault("relationship_table", None)
+    st.session_state.setdefault("relationship_ticker_info", None)
 
 
 def render_factor_tab() -> None:
@@ -94,22 +106,41 @@ def render_factor_tab() -> None:
         )
         st.caption(f"読み込みエラー: {MARKET_RELATIONSHIPS_IMPORT_ERROR}")
     else:
-        top_col1, top_col2 = st.columns([1, 1])
-        base_ticker = top_col1.text_input("中心に置く株価指数", value="^GSPC")
-        relationship_start = top_col2.text_input("分析開始日", value="2000-01-01", key="relationship_start")
-        st.caption("例: `^GSPC`, `SP500`, `NASDAQ`, `N225`, `VIX`, `USD/JPY` のような入力でも自動解釈します。")
+        top_col1, top_col2, top_col3 = st.columns([1.2, 1.2, 1])
+        preset_label = top_col1.selectbox("中心に置く株価指数", list(BASE_TICKER_PRESETS.keys()), index=0, key="relationship_base_preset")
+        preset_value = BASE_TICKER_PRESETS[preset_label]
+        if preset_value == "__custom__":
+            base_ticker = top_col2.text_input("カスタムTicker", value="^GSPC", key="relationship_custom_ticker")
+        else:
+            base_ticker = preset_value
+            top_col2.text_input("選択中のTicker", value=base_ticker, disabled=True, key="relationship_selected_ticker")
+
+        relationship_start = top_col3.text_input("分析開始日", value="2000-01-01", key="relationship_start")
+        st.caption("例: `^GSPC`, `SPY`, `^DJI`, `NASDAQ`, `N225`, `VIX`, `USD/JPY` のような入力でも自動解釈します。")
 
         if st.button("影響マップを作成する", type="primary"):
             with st.spinner("周辺指標との相関・先行遅行を計算しています..."):
                 ticker_info = describe_ticker(base_ticker)
-                st.info(f"入力 `{ticker_info['input']}` を `{ticker_info['label']}` (`{ticker_info['normalized']}`) として分析します。")
                 relationship_df = load_relationship_data(base_ticker, relationship_start)
                 relationship_table = compute_lead_lag_relationships(relationship_df, base_col="base_asset", max_lag=6)
+                st.session_state["relationship_df"] = relationship_df
+                st.session_state["relationship_table"] = relationship_table
+                st.session_state["relationship_ticker_info"] = ticker_info
 
-                if relationship_table.empty:
-                    st.warning("相関を計算できるだけのデータが集まりませんでした。")
-                    return
+        relationship_df = st.session_state.get("relationship_df")
+        relationship_table = st.session_state.get("relationship_table")
+        relationship_ticker_info = st.session_state.get("relationship_ticker_info")
 
+        if relationship_df is not None and relationship_table is not None:
+            if relationship_ticker_info:
+                st.success(
+                    f"入力 `{relationship_ticker_info['input']}` を "
+                    f"`{relationship_ticker_info['label']}` (`{relationship_ticker_info['normalized']}`) として分析しています。"
+                )
+
+            if relationship_table.empty:
+                st.warning("相関を計算できるだけのデータが集まりませんでした。")
+            else:
                 fig = px.bar(
                     relationship_table,
                     x="best_corr",
@@ -117,15 +148,16 @@ def render_factor_tab() -> None:
                     color="relationship_type",
                     orientation="h",
                     hover_data=["same_month_corr", "best_lag_months", "impact_direction"],
-                    title=f"{base_ticker} に対する周辺指標の影響",
+                    title="中心指数に対する周辺指標の影響",
                 )
                 fig.update_layout(yaxis_title="周辺指標", xaxis_title="最大相関")
                 st.plotly_chart(fig, use_container_width=True)
 
-                st.markdown("**相関・先行遅行テーブル**")
-                st.dataframe(relationship_table, use_container_width=True)
-
-                selected_indicator = st.selectbox("ラグの形を見る指標", relationship_table["indicator"].tolist(), key="lag_profile_indicator")
+                selected_indicator = st.selectbox(
+                    "ラグの形を見る指標",
+                    relationship_table["indicator"].tolist(),
+                    key="lag_profile_indicator",
+                )
                 lag_profile = compute_lag_profile(relationship_df, selected_indicator, max_lag=6)
                 lag_fig = px.line(
                     lag_profile,
@@ -137,20 +169,23 @@ def render_factor_tab() -> None:
                 lag_fig.update_layout(xaxis_title="ラグ(月)  正なら先行 / 負なら遅行", yaxis_title="相関")
                 st.plotly_chart(lag_fig, use_container_width=True)
 
+                st.markdown("**相関・先行遅行テーブル**")
+                st.dataframe(relationship_table, use_container_width=True)
+
                 with st.expander("現在使っている周辺指標"):
                     st.write(DEFAULT_MARKET_INDICATORS)
         else:
             st.info("まずは株価指数を1つ決めて、周辺の株価指数や経済指標との関係を見られます。")
 
     st.divider()
-    st.subheader("既存のファクター寄与分析")
-    st.write("Fama-French 系ファクターと景気指標の関係も、従来どおり確認できます。")
+    st.subheader("マルチファクター寄与分析")
+    st.write("Fama-French 系ファクターを使って、複数の景気・市場指標を並べて比較できます。")
     with st.expander("この欄は何を見るのか"):
         st.markdown(
             """
             - ここは個別銘柄を入れる欄ではありません。
             - 既に組み込まれている景気指標や市場指標に対して、Fama-French ファクターがどれくらい効いているかを見ます。
-            - たとえば `VIX` や `USD_JPY` や `DI_Coincident` を対象にして、どのファクターが先行しやすいかを確認する用途です。
+            - 複数の対象を同時に選んで、どのファクターが効き方の違いを生んでいるかを比較できます。
             - 個別銘柄や自分のポートフォリオに広げるなら、次の段階で別入力欄を追加するのが自然です。
             """
         )
@@ -188,43 +223,56 @@ def render_factor_tab() -> None:
 
     if factor_df_master is not None and factor_lag_results:
         st.success(f"{len(factor_df_master)} ヶ月分のデータを取得済みです。分析対象を切り替えられます。")
+        selected_targets = st.multiselect(
+            "比較したい分析対象データ",
+            factor_available_targets,
+            default=factor_available_targets[: min(2, len(factor_available_targets))],
+            key="factor_target_multi",
+        )
         st.dataframe(factor_df_master.tail(12), use_container_width=True)
 
-        target = st.selectbox("分析対象のデータ", factor_available_targets, index=0, key="factor_target")
-        if target not in factor_lag_results:
-            st.warning("このターゲットのラグ分析結果がありません。")
+        if not selected_targets:
+            st.info("少なくとも1つ分析対象を選ぶと、下に寄与分析が出ます。")
             return
-
-        lag_table = pd.DataFrame(factor_lag_results[target]).T.reset_index().rename(columns={"index": "factor"})
-        st.markdown("**最適ラグの候補**")
-        st.dataframe(lag_table, use_container_width=True)
 
         from src.analyzer import EconomicAnalyzer
         from src.modeler import EconomicModeler
 
         analyzer = EconomicAnalyzer(factor_df_master)
         analyzer.results = factor_lag_results
-        df_aligned = analyzer.get_lagged_dataset(target)
-        if df_aligned is None or df_aligned.empty:
-            st.warning("モデリング用データが作成できませんでした。")
-            return
+        factor_tabs = st.tabs(selected_targets)
 
-        modeler = EconomicModeler(df_aligned)
-        results = modeler.train_model()
-        if not results:
-            st.warning("モデル学習に必要なデータが不足しています。")
-            return
+        for tab, target in zip(factor_tabs, selected_targets):
+            with tab:
+                if target not in factor_lag_results:
+                    st.warning(f"{target} のラグ分析結果がありません。")
+                    continue
 
-        contribution_df = pd.DataFrame(results["contributions"])
-        fig = px.bar(
-            contribution_df,
-            x="factor",
-            y="weight",
-            color="weight",
-            title=f"{target} に対するファクター寄与",
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        st.metric("R^2", f"{results['r_squared']:.3f}")
+                lag_table = pd.DataFrame(factor_lag_results[target]).T.reset_index().rename(columns={"index": "factor"})
+                st.markdown("**最適ラグの候補**")
+                st.dataframe(lag_table, use_container_width=True)
+
+                df_aligned = analyzer.get_lagged_dataset(target)
+                if df_aligned is None or df_aligned.empty:
+                    st.warning("モデリング用データが作成できませんでした。")
+                    continue
+
+                modeler = EconomicModeler(df_aligned)
+                results = modeler.train_model()
+                if not results:
+                    st.warning("モデル学習に必要なデータが不足しています。")
+                    continue
+
+                contribution_df = pd.DataFrame(results["contributions"])
+                fig = px.bar(
+                    contribution_df,
+                    x="factor",
+                    y="weight",
+                    color="weight",
+                    title=f"{target} に対するファクター寄与",
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                st.metric("R^2", f"{results['r_squared']:.3f}")
     else:
         st.info("上のボタンでデータを取得すると、ここで分析対象を切り替えられます。")
 
