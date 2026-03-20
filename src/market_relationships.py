@@ -18,6 +18,69 @@ DEFAULT_MARKET_INDICATORS = {
     "GC=F": "Gold",
 }
 
+TICKER_ALIASES = {
+    "SP500": "^GSPC",
+    "S&P500": "^GSPC",
+    "S&P 500": "^GSPC",
+    "GSPC": "^GSPC",
+    "^GSPC": "^GSPC",
+    "NASDAQ": "^IXIC",
+    "IXIC": "^IXIC",
+    "^IXIC": "^IXIC",
+    "DOW": "^DJI",
+    "DJI": "^DJI",
+    "^DJI": "^DJI",
+    "RUSSELL": "^RUT",
+    "RUSSELL2000": "^RUT",
+    "RUT": "^RUT",
+    "^RUT": "^RUT",
+    "VIX": "^VIX",
+    "^VIX": "^VIX",
+    "USDJPY": "JPY=X",
+    "USD/JPY": "JPY=X",
+    "JPY=X": "JPY=X",
+    "TNX": "^TNX",
+    "^TNX": "^TNX",
+    "N225": "^N225",
+    "NIKKEI": "^N225",
+    "NIKKEI225": "^N225",
+    "NIKKEI 225": "^N225",
+    "^N225": "^N225",
+    "FTSE": "^FTSE",
+    "^FTSE": "^FTSE",
+    "GOLD": "GC=F",
+    "GC=F": "GC=F",
+}
+
+DISPLAY_NAMES = {
+    "^GSPC": "S&P 500",
+    "^IXIC": "NASDAQ",
+    "^DJI": "Dow Jones",
+    "^RUT": "Russell 2000",
+    "^VIX": "VIX",
+    "JPY=X": "USD/JPY",
+    "^TNX": "US 10Y Yield",
+    "^N225": "Nikkei 225",
+    "^FTSE": "FTSE 100",
+    "GC=F": "Gold",
+}
+
+
+def normalize_ticker(user_input: str) -> str:
+    cleaned = (user_input or "").strip()
+    if not cleaned:
+        raise ValueError("Ticker is empty.")
+    return TICKER_ALIASES.get(cleaned.upper(), cleaned)
+
+
+def describe_ticker(user_input: str) -> dict[str, str]:
+    normalized = normalize_ticker(user_input)
+    return {
+        "input": user_input,
+        "normalized": normalized,
+        "label": DISPLAY_NAMES.get(normalized, normalized),
+    }
+
 
 def _download_close_prices(tickers: list[str], start_date: str, end_date: str | None = None) -> pd.DataFrame:
     end = end_date or dt.datetime.now().strftime("%Y-%m-%d")
@@ -42,6 +105,7 @@ def load_market_relationship_frame(
     start_date: str,
     indicator_map: dict[str, str] | None = None,
 ) -> pd.DataFrame:
+    base_ticker = normalize_ticker(base_ticker)
     indicator_map = indicator_map or DEFAULT_MARKET_INDICATORS
     tickers = [base_ticker] + [ticker for ticker in indicator_map if ticker != base_ticker]
     prices = _download_close_prices(tickers, start_date=start_date)
@@ -51,6 +115,10 @@ def load_market_relationship_frame(
     rename_map = {base_ticker: "base_asset"}
     rename_map.update(indicator_map)
     monthly_returns.rename(columns=rename_map, inplace=True)
+
+    if "base_asset" not in monthly_returns.columns and base_ticker in monthly_returns.columns:
+        monthly_returns.rename(columns={base_ticker: "base_asset"}, inplace=True)
+
     return monthly_returns.dropna(how="all")
 
 
