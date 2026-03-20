@@ -214,6 +214,16 @@ class DataLoader:
                 final_df = final_df.join(df, how='left')
 
         final_df = final_df[~final_df.index.duplicated(keep="first")].sort_index()
+
+        # 水準値のままだとファクター回帰と相性が悪いので、変化率・前月差も作る
+        if 'VIX' in final_df.columns:
+            final_df['VIX_change_pct'] = final_df['VIX'].pct_change() * 100.0
+        if 'USD_JPY' in final_df.columns:
+            final_df['USD_JPY_change_pct'] = final_df['USD_JPY'].pct_change() * 100.0
+        if 'DI_Coincident' in final_df.columns:
+            final_df['DI_Coincident_change'] = final_df['DI_Coincident'].diff()
+        if 'CI_Coincident' in final_df.columns:
+            final_df['CI_Coincident_change'] = final_df['CI_Coincident'].diff()
         
         print(f"Data merge complete. Final shape: {final_df.shape}")
         print(f"Data range: {final_df.index.min()} to {final_df.index.max()}")
