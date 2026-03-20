@@ -71,6 +71,14 @@ BASE_TICKER_PRESETS = {
 FACTOR_SOURCE_PRESETS = list(FACTOR_DATASETS.keys())
 PORTFOLIO_SOURCE_PRESETS = list(PORTFOLIO_DATASETS.keys())
 
+RECOMMENDED_FACTOR_SOURCE_BY_PORTFOLIO = {
+    "Japan 32 Portfolios": "Japan 5 Factors",
+    "10 Industry Portfolios": "North America 5 Factors",
+}
+
+MACRO_LEVEL_TARGETS = {"VIX", "USD_JPY", "DI_Coincident", "CI_Coincident"}
+MACRO_CHANGE_TARGETS = {"VIX_change_pct", "USD_JPY_change_pct", "DI_Coincident_change", "CI_Coincident_change"}
+
 REGIME_LABELS_JA = {
     "supportive_uptrend": "上昇を支える局面",
     "transition": "転換・様子見局面",
@@ -221,6 +229,36 @@ def get_selected_relationship_ticker() -> str:
     return preset_value
 
 
+def get_effective_factor_source(factor_source: str, portfolio_source: str) -> tuple[str, str | None]:
+    recommended = RECOMMENDED_FACTOR_SOURCE_BY_PORTFOLIO.get(portfolio_source)
+    if recommended and factor_source != recommended:
+        return recommended, recommended
+    return factor_source, None
+
+
+def prioritize_factor_targets(targets: list[str], portfolio_source: str) -> list[str]:
+    portfolio_priority = 0 if portfolio_source != "なし" else 1
+
+    def sort_key(name: str) -> tuple[int, int, str]:
+        if name in MACRO_CHANGE_TARGETS:
+            return (1, 0, name)
+        if name in MACRO_LEVEL_TARGETS:
+            return (2, 0, name)
+        return (portfolio_priority, 0, name)
+
+    if portfolio_source != "なし":
+        def portfolio_first(name: str) -> tuple[int, int, str]:
+            if name in MACRO_CHANGE_TARGETS:
+                return (1, 0, name)
+            if name in MACRO_LEVEL_TARGETS:
+                return (2, 0, name)
+            return (0, 0, name)
+
+        return sorted(targets, key=portfolio_first)
+
+    return sorted(targets, key=sort_key)
+
+
 def render_factor_tab() -> None:
     render_section_header(
         "Step 1",
@@ -333,6 +371,12 @@ def render_factor_tab() -> None:
     factor_col1, factor_col2 = st.columns(2)
     factor_source = factor_col1.selectbox("使うファクターデータ", FACTOR_SOURCE_PRESETS, index=0, key="factor_source_select")
     portfolio_source = factor_col2.selectbox("追加で合わせるデータ", PORTFOLIO_SOURCE_PRESETS, index=0, key="portfolio_source_select")
+    effective_factor_source, auto_switched_source = get_effective_factor_source(factor_source, portfolio_source)
+    if auto_switched_source:
+        st.info(
+            f"`{portfolio_source}` は `{auto_switched_source}` と相性が良いため、"
+            " 取得時はこちらを優先して使います。"
+        )
     with st.expander("この欄で分かること"):
         st.markdown(
             """
@@ -341,12 +385,13 @@ def render_factor_tab() -> None:
             - `Japan 5 Factors` や `North America 5 Factors` を切り替えて、地域ごとの差も比べられます。
             - 複数の対象を同時に選んで、どのファクターが効き方の違いを生んでいるかを比較できます。
             - 個別銘柄や自分のポートフォリオに広げるなら、次の段階で別入力欄を追加するのが自然です。
+            - 産業別ポートフォリオは、対応する地域のファクターを使わないと決定係数がかなり下がりやすいです。
             """
         )
 
     if st.button("ファクターデータを取得 / 更新する", type="primary"):
         with st.spinner("データ取得とラグ分析を進めています..."):
-            df_master = load_factor_data(factor_source, portfolio_source)
+            df_master = load_factor_data(effective_factor_source, portfolio_source)
 
             if df_master.empty:
                 st.error("データ取得に失敗しました。ネットワーク接続やデータソースを確認してください。")
@@ -357,6 +402,7 @@ def render_factor_tab() -> None:
                 st.session_state["factor_weight_rows"] = []
             else:
                 available_targets = [col for col in df_master.columns if col not in FIVE_FACTOR_COLUMNS + ["RF"]]
+                available_targets = prioritize_factor_targets(available_targets, portfolio_source)
                 if not available_targets:
                     st.error("分析対象となるターゲット指標が見つかりませんでした。")
                     st.session_state["factor_df_master"] = None
@@ -372,8 +418,9 @@ def render_factor_tab() -> None:
                     st.session_state["factor_df_master"] = df_master
                     st.session_state["factor_lag_results"] = lag_results
                     st.session_state["factor_available_targets"] = available_targets
-                    st.session_state["factor_source_name"] = factor_source
+                    st.session_state["factor_source_name"] = effective_factor_source
                     st.session_state["portfolio_source_name"] = portfolio_source
+                    st.session_state["factor_target_multi"] = available_targets[: min(3, len(available_targets))]
 
     factor_df_master = st.session_state.get("factor_df_master")
     factor_lag_results = st.session_state.get("factor_lag_results")
@@ -384,10 +431,14 @@ def render_factor_tab() -> None:
             f"{len(factor_df_master)} ヶ月分のデータを取得済みです。"
             f" ファクター: {st.session_state.get('factor_source_name')} / 追加データ: {st.session_state.get('portfolio_source_name')}"
         )
+        current_selection = [target for target in st.session_state.get("factor_target_multi", []) if target in factor_available_targets]
+        if not current_selection:
+            current_selection = factor_available_targets[: min(3, len(factor_available_targets))]
+            st.session_state["factor_target_multi"] = current_selection
+
         selected_targets = st.multiselect(
             "比較したい分析対象データ",
             factor_available_targets,
-            default=factor_available_targets[: min(2, len(factor_available_targets))],
             key="factor_target_multi",
         )
         st.dataframe(factor_df_master.tail(12), width="stretch")
@@ -395,6 +446,11 @@ def render_factor_tab() -> None:
         if not selected_targets:
             st.info("少なくとも1つ分析対象を選ぶと、下に寄与分析が出ます。")
         else:
+            if st.session_state.get("portfolio_source_name") == "10 Industry Portfolios" and st.session_state.get("factor_source_name") == "North America 5 Factors":
+                st.caption("この組み合わせは相性がよく、産業別ポートフォリオの決定係数は比較的高く出やすいです。")
+            elif st.session_state.get("portfolio_source_name") == "Japan 32 Portfolios" and st.session_state.get("factor_source_name") == "Japan 5 Factors":
+                st.caption("この組み合わせは相性がよく、日本ポートフォリオの決定係数は比較的高く出やすいです。")
+
             from src.analyzer import EconomicAnalyzer
             from src.modeler import EconomicModeler
 
@@ -452,6 +508,8 @@ def render_factor_tab() -> None:
                     )
                     st.plotly_chart(fig, width="stretch")
                     st.metric("R^2", f"{results['r_squared']:.3f}")
+                    if results["r_squared"] < 0.25:
+                        st.caption("この対象は 5 ファクターだけでは説明しきれていません。地域ミスマッチか、水準値を見ている可能性があります。")
 
             st.session_state["factor_comparison_rows"] = comparison_rows
             st.session_state["factor_weight_rows"] = weight_rows
@@ -738,6 +796,7 @@ def render_regime_tab() -> None:
                 price_chart = px.line(chart_df, x="Date", y="matched_growth_rate", color="regime_label_ja", title="いまの相場がどの局面に近いか")
                 price_chart.update_layout(yaxis_title="年率換算成長率", xaxis_title="日付")
                 st.plotly_chart(price_chart, width="stretch")
+                st.caption("上の図は価格そのものではなく、その時点で観測された年率換算の到達成長率です。色は HMM が分けた局面を表しています。")
 
                 target_chart = px.line(
                     chart_df,
@@ -747,6 +806,7 @@ def render_regime_tab() -> None:
                 )
                 target_chart.update_layout(yaxis_title="年率", xaxis_title="日付")
                 st.plotly_chart(target_chart, width="stretch")
+                st.caption("下の図は、設定した目標成長率と実際の到達成長率の距離を見ています。離れ方が大きいほど、過熱や失速の候補として見ています。")
 
                 st.markdown("**直近の状態一覧**")
                 st.dataframe(
