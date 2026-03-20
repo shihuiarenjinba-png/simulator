@@ -88,6 +88,7 @@ def build_regime_features(
     candidate_targets: list[float] | None = None,
     dynamic_target_min_window: int = 24,
     dynamic_target_max_window: int = 180,
+    extra_features: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     df = price_df.copy()
     df["realized_growth_reference"] = annualized_growth_from_window(df["log_price"], trend_window_months)
@@ -119,6 +120,14 @@ def build_regime_features(
     )
     df = df.join(wavelet_features)
 
+    extra_feature_columns: list[str] = []
+    if extra_features is not None and not extra_features.empty:
+        aligned_extra = extra_features.copy()
+        aligned_extra = aligned_extra.loc[~aligned_extra.index.duplicated(keep="first")].sort_index()
+        aligned_extra = aligned_extra.add_prefix("factor_")
+        df = df.join(aligned_extra, how="left")
+        extra_feature_columns = aligned_extra.columns.tolist()
+
     feature_columns = [
         "return_1m",
         "realized_growth_reference",
@@ -135,4 +144,5 @@ def build_regime_features(
         "wavelet_detail_energy_1",
         "wavelet_detail_energy_2",
     ]
+    feature_columns.extend(extra_feature_columns)
     return df[feature_columns].dropna()
