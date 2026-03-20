@@ -7,7 +7,6 @@ statsmodels
 scikit-learn
 hmmlearn
 PyWavelets
-pandas-datareader
 requests
 openpyxl
 kaleido==0.2.1
