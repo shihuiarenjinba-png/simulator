@@ -7,6 +7,9 @@ import yfinance as yf
 
 
 DEFAULT_MARKET_INDICATORS = {
+    "SPY": "SPY ETF",
+    "QQQ": "QQQ ETF",
+    "DIA": "DIA ETF",
     "^IXIC": "NASDAQ",
     "^DJI": "Dow Jones",
     "^RUT": "Russell 2000",
@@ -22,8 +25,11 @@ TICKER_ALIASES = {
     "SP500": "^GSPC",
     "S&P500": "^GSPC",
     "S&P 500": "^GSPC",
+    "SPY": "SPY",
     "GSPC": "^GSPC",
     "^GSPC": "^GSPC",
+    "QQQ": "QQQ",
+    "DIA": "DIA",
     "NASDAQ": "^IXIC",
     "IXIC": "^IXIC",
     "^IXIC": "^IXIC",
@@ -54,6 +60,9 @@ TICKER_ALIASES = {
 
 DISPLAY_NAMES = {
     "^GSPC": "S&P 500",
+    "SPY": "SPY ETF",
+    "QQQ": "QQQ ETF",
+    "DIA": "DIA ETF",
     "^IXIC": "NASDAQ",
     "^DJI": "Dow Jones",
     "^RUT": "Russell 2000",
