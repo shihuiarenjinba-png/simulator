@@ -124,6 +124,7 @@ def ensure_app_state() -> None:
     st.session_state.setdefault("macro_relationship_table", None)
     st.session_state.setdefault("macro_regression_result", None)
     st.session_state.setdefault("macro_ticker_info", None)
+    st.session_state.setdefault("macro_error", None)
 
 
 def get_selected_relationship_ticker() -> str:
@@ -159,12 +160,22 @@ def render_factor_tab() -> None:
 
         if st.button("影響マップを作成する", type="primary"):
             with st.spinner("周辺指標との相関・先行遅行を計算しています..."):
-                ticker_info = describe_ticker(base_ticker)
-                relationship_df = load_relationship_data(base_ticker, relationship_start)
-                relationship_table = compute_lead_lag_relationships(relationship_df, base_col="base_asset", max_lag=6)
-                st.session_state["relationship_df"] = relationship_df
-                st.session_state["relationship_table"] = relationship_table
-                st.session_state["relationship_ticker_info"] = ticker_info
+                try:
+                    ticker_info = describe_ticker(base_ticker)
+                    relationship_df = load_relationship_data(base_ticker, relationship_start)
+                    relationship_table = compute_lead_lag_relationships(relationship_df, base_col="base_asset", max_lag=6)
+                    st.session_state["relationship_df"] = relationship_df
+                    st.session_state["relationship_table"] = relationship_table
+                    st.session_state["relationship_ticker_info"] = ticker_info
+                except Exception as exc:
+                    st.session_state["relationship_df"] = None
+                    st.session_state["relationship_table"] = None
+                    st.session_state["relationship_ticker_info"] = describe_ticker(base_ticker)
+                    st.error(
+                        "影響マップ用の基準価格を取得できませんでした。"
+                        f" 詳細: {exc}"
+                    )
+                    st.caption("Yahoo Finance の一時的なレート制限で失敗することがあります。少し時間を空けて再実行してください。")
 
         relationship_df = st.session_state.get("relationship_df")
         relationship_table = st.session_state.get("relationship_table")
@@ -382,23 +393,49 @@ def render_factor_tab() -> None:
 
     if st.button("マクロ指数分析を実行する", type="primary"):
         with st.spinner("マクロ指数との先行相関と回帰寄与を計算しています..."):
-            macro_frame = load_macro_relationship_data(macro_target_ticker, macro_start_date)
-            macro_table = compute_macro_lead_lag_relationships(macro_frame, max_lag=macro_max_lag)
-            macro_regression_df = build_macro_regression_dataset(macro_frame, macro_table, top_n=macro_top_n) if not macro_table.empty else pd.DataFrame()
-            macro_regression_result = fit_macro_regression(macro_regression_df)
-            st.session_state["macro_relationship_df"] = macro_frame
-            st.session_state["macro_relationship_table"] = macro_table
-            st.session_state["macro_regression_result"] = macro_regression_result
-            st.session_state["macro_ticker_info"] = describe_ticker(macro_target_ticker)
+            try:
+                macro_frame = load_macro_relationship_data(macro_target_ticker, macro_start_date)
+                macro_table = compute_macro_lead_lag_relationships(macro_frame, max_lag=macro_max_lag)
+                macro_regression_df = (
+                    build_macro_regression_dataset(macro_frame, macro_table, top_n=macro_top_n)
+                    if not macro_table.empty
+                    else pd.DataFrame()
+                )
+                macro_regression_result = fit_macro_regression(macro_regression_df)
+                st.session_state["macro_relationship_df"] = macro_frame
+                st.session_state["macro_relationship_table"] = macro_table
+                st.session_state["macro_regression_result"] = macro_regression_result
+                st.session_state["macro_ticker_info"] = describe_ticker(macro_target_ticker)
+                st.session_state["macro_error"] = None
+            except Exception as exc:
+                st.session_state["macro_relationship_df"] = None
+                st.session_state["macro_relationship_table"] = None
+                st.session_state["macro_regression_result"] = None
+                st.session_state["macro_ticker_info"] = describe_ticker(macro_target_ticker)
+                st.session_state["macro_error"] = str(exc)
 
     macro_relationship_table = st.session_state.get("macro_relationship_table")
     macro_regression_result = st.session_state.get("macro_regression_result")
     macro_ticker_info = st.session_state.get("macro_ticker_info")
+    macro_relationship_df = st.session_state.get("macro_relationship_df")
+    macro_error = st.session_state.get("macro_error")
 
-    if macro_relationship_table is not None:
+    if macro_error:
+        st.error(
+            "マクロ分析用の基準価格を取得できませんでした。"
+            f" {macro_error}"
+        )
+        st.caption("Yahoo Finance の一時的なレート制限で空データになることがあります。少し時間を空けて再実行するか、`SPY` など近いETFで試してください。")
+    elif macro_relationship_table is not None:
         if macro_ticker_info:
             st.success(
                 f"マクロ分析対象は `{macro_ticker_info['label']}` (`{macro_ticker_info['normalized']}`) です。"
+            )
+        if macro_relationship_df is not None and macro_relationship_df.attrs.get("used_proxy"):
+            resolved_ticker = macro_relationship_df.attrs.get("resolved_ticker")
+            st.info(
+                "基準指数の取得が不安定だったため、"
+                f" 近い代理ティッカー `{resolved_ticker}` で月次リターンを補完しています。"
             )
 
         if macro_relationship_table.empty:
@@ -508,89 +545,102 @@ def render_regime_tab() -> None:
 
     if st.button("レジーム分析を実行する", type="primary"):
         with st.spinner("価格データ取得とレジーム推定を進めています..."):
-            prices = load_regime_data(ticker, start_date)
-            extra_feature_frames = []
-            if use_factor_features and regime_factor_source:
-                factor_features = load_factor_feature_frame(regime_factor_source)
-                if factor_features is not None and not factor_features.empty:
-                    extra_feature_frames.append(factor_features)
-            if use_macro_features and macro_feature_top_n is not None and macro_feature_max_lag is not None:
-                macro_features = build_macro_regime_features(
-                    base_ticker=ticker,
-                    start_date=start_date,
-                    max_lag=macro_feature_max_lag,
-                    top_n=macro_feature_top_n,
+            try:
+                prices = load_regime_data(ticker, start_date)
+                extra_feature_frames = []
+                if use_factor_features and regime_factor_source:
+                    factor_features = load_factor_feature_frame(regime_factor_source)
+                    if factor_features is not None and not factor_features.empty:
+                        extra_feature_frames.append(factor_features)
+                if use_macro_features and macro_feature_top_n is not None and macro_feature_max_lag is not None:
+                    try:
+                        macro_features = build_macro_regime_features(
+                            base_ticker=ticker,
+                            start_date=start_date,
+                            max_lag=macro_feature_max_lag,
+                            top_n=macro_feature_top_n,
+                        )
+                        if macro_features is not None and not macro_features.empty:
+                            extra_feature_frames.append(macro_features)
+                    except Exception as exc:
+                        st.warning(
+                            "マクロ特徴量の取得に失敗したため、今回は価格系列だけでレジーム推定を続けます。"
+                            f" 詳細: {exc}"
+                        )
+
+                extra_features = None
+                if extra_feature_frames:
+                    extra_features = pd.concat(extra_feature_frames, axis=1)
+                    extra_features = extra_features.loc[~extra_features.index.duplicated(keep="first")].sort_index()
+
+                features = build_regime_features(
+                    prices,
+                    growth_target=growth_target,
+                    trend_window_months=trend_window,
+                    wavelet_window_months=wavelet_window,
+                    wavelet_name=wavelet_name,
+                    growth_target_mode=growth_mode,
+                    candidate_targets=candidate_targets,
+                    extra_features=extra_features,
                 )
-                if macro_features is not None and not macro_features.empty:
-                    extra_feature_frames.append(macro_features)
+                model = WaveletHMMRegimeModel(n_states=int(n_states))
+                result = model.fit_predict(features)
+                result["regime_label_ja"] = result["regime_label"].map(REGIME_LABELS_JA).fillna(result["regime_label"])
 
-            extra_features = None
-            if extra_feature_frames:
-                extra_features = pd.concat(extra_feature_frames, axis=1)
-                extra_features = extra_features.loc[~extra_features.index.duplicated(keep="first")].sort_index()
+                output_dir = os.path.join(current_dir, "outputs")
+                os.makedirs(output_dir, exist_ok=True)
+                output_path = os.path.join(output_dir, "regime_states.csv")
+                result.to_csv(output_path)
 
-            features = build_regime_features(
-                prices,
-                growth_target=growth_target,
-                trend_window_months=trend_window,
-                wavelet_window_months=wavelet_window,
-                wavelet_name=wavelet_name,
-                growth_target_mode=growth_mode,
-                candidate_targets=candidate_targets,
-                extra_features=extra_features,
-            )
-            model = WaveletHMMRegimeModel(n_states=int(n_states))
-            result = model.fit_predict(features)
-            result["regime_label_ja"] = result["regime_label"].map(REGIME_LABELS_JA).fillna(result["regime_label"])
+                latest = model.summarize_recent_regime(result)
+                metric1, metric2, metric3, metric4 = st.columns(4)
+                metric1.metric("現在の局面", REGIME_LABELS_JA.get(latest["regime_label"], latest["regime_label"]))
+                metric2.metric("成長率とのズレ", f"{latest['trend_gap']:.3f}")
+                metric3.metric("状態の確信度", f"{latest['current_state_prob']:.3f}")
+                metric4.metric("採用された成長目標", f"{latest['active_growth_target']:.2%}")
 
-            output_dir = os.path.join(current_dir, "outputs")
-            os.makedirs(output_dir, exist_ok=True)
-            output_path = os.path.join(output_dir, "regime_states.csv")
-            result.to_csv(output_path)
+                st.caption(
+                    f"今回の判定では、直近で年率 {latest['active_growth_target']:.2%} に最も近い窓として "
+                    f"{int(latest['active_growth_window_months'])} ヶ月が採用されました。"
+                )
 
-            latest = model.summarize_recent_regime(result)
-            metric1, metric2, metric3, metric4 = st.columns(4)
-            metric1.metric("現在の局面", REGIME_LABELS_JA.get(latest["regime_label"], latest["regime_label"]))
-            metric2.metric("成長率とのズレ", f"{latest['trend_gap']:.3f}")
-            metric3.metric("状態の確信度", f"{latest['current_state_prob']:.3f}")
-            metric4.metric("採用された成長目標", f"{latest['active_growth_target']:.2%}")
+                chart_df = result.reset_index().rename(columns={"index": "Date"})
+                price_chart = px.line(chart_df, x="Date", y="matched_growth_rate", color="regime_label_ja", title="成長率の到達状況とレジーム")
+                price_chart.update_layout(yaxis_title="年率換算成長率", xaxis_title="日付")
+                st.plotly_chart(price_chart, width="stretch")
 
-            st.caption(
-                f"今回の判定では、直近で年率 {latest['active_growth_target']:.2%} に最も近い窓として "
-                f"{int(latest['active_growth_window_months'])} ヶ月が採用されました。"
-            )
+                target_chart = px.line(
+                    chart_df,
+                    x="Date",
+                    y=["active_growth_target", "matched_growth_rate"],
+                    title="目標成長率と実現成長率",
+                )
+                target_chart.update_layout(yaxis_title="年率", xaxis_title="日付")
+                st.plotly_chart(target_chart, width="stretch")
 
-            chart_df = result.reset_index().rename(columns={"index": "Date"})
-            price_chart = px.line(chart_df, x="Date", y="matched_growth_rate", color="regime_label_ja", title="成長率の到達状況とレジーム")
-            price_chart.update_layout(yaxis_title="年率換算成長率", xaxis_title="日付")
-            st.plotly_chart(price_chart, width="stretch")
-
-            target_chart = px.line(
-                chart_df,
-                x="Date",
-                y=["active_growth_target", "matched_growth_rate"],
-                title="目標成長率と実現成長率",
-            )
-            target_chart.update_layout(yaxis_title="年率", xaxis_title="日付")
-            st.plotly_chart(target_chart, width="stretch")
-
-            st.markdown("**Recent regime states**")
-            st.dataframe(
-                result.tail(24)[
-                    [
-                        "return_1m",
-                        "matched_growth_rate",
-                        "active_growth_target",
-                        "active_growth_window_months",
-                        "trend_gap",
-                        "vol_12m",
-                        "state",
-                        "regime_label_ja",
-                    ]
-                ],
-                width="stretch",
-            )
-            st.caption(f"CSV saved to {output_path}")
+                st.markdown("**Recent regime states**")
+                st.dataframe(
+                    result.tail(24)[
+                        [
+                            "return_1m",
+                            "matched_growth_rate",
+                            "active_growth_target",
+                            "active_growth_window_months",
+                            "trend_gap",
+                            "vol_12m",
+                            "state",
+                            "regime_label_ja",
+                        ]
+                    ],
+                    width="stretch",
+                )
+                st.caption(f"CSV saved to {output_path}")
+            except Exception as exc:
+                st.error(
+                    "レジーム分析に必要な価格データを取得できませんでした。"
+                    f" 詳細: {exc}"
+                )
+                st.caption("Yahoo Finance の一時的なレート制限が原因のことがあります。少し時間を空けて再実行してください。")
     else:
         st.info("パラメータを調整してから実行すると、結果を CSV に保存します。")
 
